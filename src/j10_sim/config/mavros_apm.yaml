@@ -31,13 +31,17 @@
 
     # MAVROS's own official ArduPilot plugin list (mavros/launch/apm_pluginlists.yaml)
     # denylists these because they don't apply to ArduPilot, are PX4-only, or aren't used.
-    # 'companion_process' is an addition beyond stock: it has been observed crashing
-    # mavros_node on startup with "create_subscription() called for existing topic name
-    # ... with incompatible type" on some builds. None of these are needed for Phase 1 —
-    # state, local_position, battery, rangefinder, setpoint_raw, estimator_status and
-    # command all load normally. Re-enable px4flow only once the real MTF-01 flow path is
-    # exercised (Phase 6); vehicle_state_node already treats an absent topic as flow_valid
-    # staying false rather than an error.
+    # 'companion*' is an addition beyond stock: the companion-process-status plugin has
+    # been observed crashing mavros_node on startup with "create_subscription() called for
+    # existing topic name ... with incompatible type" on some builds. A glob rather than
+    # the exact plugin id, because is_plugin_allowed() in mavros_uas.cpp matches these
+    # patterns with fnmatch, and the id string has differed across releases
+    # ("companion_process" on the ros2 HEAD source read while building this config, but
+    # the apt package for a given distro can trail that by a fair margin). None of these
+    # are needed for Phase 1 — state, local_position, battery, rangefinder, setpoint_raw,
+    # estimator_status and command all load normally. Re-enable px4flow only once the real
+    # MTF-01 flow path is exercised (Phase 6); vehicle_state_node already treats an absent
+    # topic as flow_valid staying false rather than an error.
     plugin_denylist:
       - actuator_control
       - ftp
@@ -49,4 +53,4 @@
       - vibration
       - vision_speed_estimate
       - wheel_odometry
-      - companion_process
+      - companion*

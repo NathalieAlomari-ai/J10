@@ -184,6 +184,55 @@ ros2 service call /j10/vehicle/arm j10_interfaces/srv/ArmDisarm "{arm: false}"
 
 ---
 
+## MAVROS plugin id discovery (temporary — remove once resolved)
+
+`config/mavros_apm.yaml` currently ships `plugin_denylist: ['*']`, which blocks every
+MAVROS plugin from loading. This is deliberate and temporary, not a mistake: several stock
+plugins on at least one observed build independently reuse the relative topic name
+`~/status` (`companion_process_status` and `esc_status` confirmed so far), and whichever
+one instantiates second crashes the whole node with a duplicate publisher/subscriber. The
+plugin id strings a given build actually registers have already disagreed with what
+upstream `ros2`-branch source suggests, so guessing them one crash at a time isn't
+reliable — the log from the running binary is the only source that can be trusted.
+
+**To collect the real ids:** run MAVROS with this config and watch the log. Nothing should
+crash, because nothing is allowed to instantiate:
+
+```bash
+ros2 launch j10_sim sitl.launch.py gazebo:=false sitl:=false j10:=false
+```
+
+Every line reads `Plugin <id> ignored`. Collect the full list, then replace the
+`plugin_denylist` block with:
+
+```yaml
+plugin_denylist:
+  - '*'
+plugin_allowlist:
+  - <sys/state plugin id>       # /mavros/state, battery, estimator_status
+  - <local_position plugin id>  # /mavros/local_position/pose, velocity_local
+  - <setpoint_raw plugin id>    # /mavros/setpoint_raw/local — the bridge's core output
+  - <command plugin id>         # arming, takeoff, set_mode
+  - <rangefinder plugin id>     # /mavros/rangefinder/rangefinder
+```
+
+using the exact strings the log printed. `is_plugin_allowed()` in `mavros_uas.cpp` matches
+both lists with `fnmatch`, so a glob (e.g. `sys*`) is fine if it's unambiguous against the
+full id list you collected.
+
+With `/mavros/state` alive, confirm the target set actually covers what `vehicle_state_node`
+needs:
+
+```bash
+ros2 topic list | grep mavros
+```
+
+Every topic in the "Topic contract" table in `docs/ARCHITECTURE.md` under `j10_mavlink`
+should be present (`px4flow` is intentionally excluded — see the code comment in
+`vehicle_state_node.cpp`, not needed until Phase 6).
+
+---
+
 ## Frame conventions
 
 The single most common Phase 1 bug is a mirrored axis, so the convention is pinned down

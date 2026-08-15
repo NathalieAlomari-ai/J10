@@ -47,12 +47,23 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Default the parameter file to the one installed alongside this script, falling back to
-# the source tree so the script also works when run directly out of src/.
+# Default the parameter file to the one installed alongside this package.
+if [[ -z "${PARAM_FILE}" ]]; then
+  # Ask the running ROS environment where j10_sim actually lives. This is robust to both
+  # the default per-package install layout and `colcon build --merge-install`, where the
+  # relative path from this script to share/ differs.
+  if command -v ros2 >/dev/null 2>&1; then
+    PKG_PREFIX="$(ros2 pkg prefix j10_sim 2>/dev/null || true)"
+    if [[ -n "${PKG_PREFIX}" && -f "${PKG_PREFIX}/share/j10_sim/config/sitl_indoor.parm" ]]; then
+      PARAM_FILE="${PKG_PREFIX}/share/j10_sim/config/sitl_indoor.parm"
+    fi
+  fi
+fi
+
 if [[ -z "${PARAM_FILE}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   for candidate in \
-    "${SCRIPT_DIR}/../share/j10_sim/config/sitl_indoor.parm" \
+    "${SCRIPT_DIR}/../../share/j10_sim/config/sitl_indoor.parm" \
     "${SCRIPT_DIR}/../config/sitl_indoor.parm"
   do
     if [[ -f "${candidate}" ]]; then

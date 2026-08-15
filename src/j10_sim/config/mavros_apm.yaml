@@ -29,21 +29,33 @@
       min_voltage: [10.0]
       disable_diag: false
 
-    # TEMPORARY DIAGNOSTIC — see src/j10_sim/README.md "MAVROS plugin id discovery".
+    # Allowlist, not denylist. Several stock plugins on this build independently reuse the
+    # relative topic name "~/status" (companion_process_status and esc_status both
+    # confirmed crashing mavros_node on startup with a duplicate publisher/subscriber);
+    # excluding them by name one crash at a time proved unreliable, and this installed
+    # build's plugin id strings have already disagreed with upstream ros2-branch source
+    # more than once while chasing that (e.g. "command"/"sys_status" here vs. "cmd"/"sys"
+    # in source). This exact list — plugin_denylist: ['*'] with the allowlist below as the
+    # only carve-out — was captured empirically: `plugin_denylist: ['*']` with no allowlist
+    # blocks every plugin, letting mavros_node print "Plugin <id> ignored" for the complete,
+    # authoritative id list for this build with zero crash risk, then the five plugins
+    # Phase 1 actually needs were picked out of that captured list and verified against it
+    # with Python's fnmatch (same matching mavros_uas.cpp's is_plugin_allowed() uses).
     #
-    # Multiple stock MAVROS plugins turned out to independently reuse the relative topic
-    # name "~/status" (companion_process_status and esc_status confirmed so far; there may
-    # be more). Whichever loads second crashes the whole node on a duplicate pub/sub, so
-    # denylisting them by name one crash at a time is unreliable — and plugin id strings
-    # printed by THIS installed build have already disagreed with upstream ros2-branch
-    # source read for this config (companion_process_status vs. companion_process).
+    #   sys_status     -> /mavros/state, /mavros/battery, /mavros/estimator_status
+    #   local_position  -> /mavros/local_position/pose, /mavros/local_position/velocity_local
+    #   setpoint_raw    -> /mavros/setpoint_raw/local — the bridge's core output
+    #   command         -> /mavros/cmd/arming, /mavros/cmd/takeoff, /mavros/set_mode
+    #   rangefinder     -> /mavros/rangefinder/rangefinder
     #
-    # denylist ['*'] with no allowlist blocks every plugin from instantiating — nothing to
-    # collide, so mavros_node should come up without crashing — while still printing
-    # "Plugin <id> ignored" for every candidate straight from the running binary. That
-    # log is the authoritative plugin id list for this exact build. Once collected, this
-    # block gets replaced with a real plugin_allowlist naming only what Phase 1 needs
-    # (sys/state+battery+estimator status, local_position, setpoint_raw, command/arming,
-    # rangefinder), built from those confirmed ids rather than guessed from source.
+    # px4flow is deliberately excluded — not needed until the real MTF-01 flow path is
+    # exercised in Phase 6; vehicle_state_node already treats that topic being entirely
+    # absent as flow_valid staying false rather than an error.
     plugin_denylist:
       - '*'
+    plugin_allowlist:
+      - sys_status
+      - command
+      - local_position
+      - setpoint_raw
+      - rangefinder

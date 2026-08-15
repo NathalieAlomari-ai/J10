@@ -184,44 +184,28 @@ ros2 service call /j10/vehicle/arm j10_interfaces/srv/ArmDisarm "{arm: false}"
 
 ---
 
-## MAVROS plugin id discovery (temporary — remove once resolved)
+## MAVROS plugin allowlist — why it's an allowlist, not a denylist
 
-`config/mavros_apm.yaml` currently ships `plugin_denylist: ['*']`, which blocks every
-MAVROS plugin from loading. This is deliberate and temporary, not a mistake: several stock
-plugins on at least one observed build independently reuse the relative topic name
-`~/status` (`companion_process_status` and `esc_status` confirmed so far), and whichever
-one instantiates second crashes the whole node with a duplicate publisher/subscriber. The
-plugin id strings a given build actually registers have already disagreed with what
-upstream `ros2`-branch source suggests, so guessing them one crash at a time isn't
-reliable — the log from the running binary is the only source that can be trusted.
+`config/mavros_apm.yaml` loads only five MAVROS plugins (`sys_status`, `command`,
+`local_position`, `setpoint_raw`, `rangefinder`) via `plugin_allowlist`, with everything
+else blocked by `plugin_denylist: ['*']`. This isn't minimalism for its own sake — several
+stock MAVROS plugins turned out to independently reuse the relative topic name `~/status`
+(`companion_process_status` and `esc_status` both confirmed crashing `mavros_node` on
+startup with a duplicate publisher/subscriber on that name), so denylisting the offenders
+one crash at a time proved unreliable. The five above are exactly what Phase 1 needs and
+nothing more, which sidesteps the whole class of collision rather than chasing it.
 
-**To collect the real ids:** run MAVROS with this config and watch the log. Nothing should
-crash, because nothing is allowed to instantiate:
+If you ever need to change this list (a later phase needs another plugin, e.g. `imu` or
+`sys_time`), don't guess the id string from upstream source — it's already disagreed with
+what this exact installed build registers more than once while this config was built
+(`command`/`sys_status` here vs. `cmd`/`sys` in the `ros2`-branch source read at the time).
+Get the authoritative list straight from the binary instead: temporarily set
+`plugin_denylist: ['*']` with no `plugin_allowlist`, which blocks every plugin from
+instantiating (so nothing can collide and `mavros_node` comes up clean), and watch the log
+— every candidate prints `Plugin <id> ignored` with its real id. Add what you need to
+`plugin_allowlist` from that list, then restore the denylist-all line.
 
-```bash
-ros2 launch j10_sim sitl.launch.py gazebo:=false sitl:=false j10:=false
-```
-
-Every line reads `Plugin <id> ignored`. Collect the full list, then replace the
-`plugin_denylist` block with:
-
-```yaml
-plugin_denylist:
-  - '*'
-plugin_allowlist:
-  - <sys/state plugin id>       # /mavros/state, battery, estimator_status
-  - <local_position plugin id>  # /mavros/local_position/pose, velocity_local
-  - <setpoint_raw plugin id>    # /mavros/setpoint_raw/local — the bridge's core output
-  - <command plugin id>         # arming, takeoff, set_mode
-  - <rangefinder plugin id>     # /mavros/rangefinder/rangefinder
-```
-
-using the exact strings the log printed. `is_plugin_allowed()` in `mavros_uas.cpp` matches
-both lists with `fnmatch`, so a glob (e.g. `sys*`) is fine if it's unambiguous against the
-full id list you collected.
-
-With `/mavros/state` alive, confirm the target set actually covers what `vehicle_state_node`
-needs:
+Once MAVROS is up, confirm the topic set actually covers what `vehicle_state_node` needs:
 
 ```bash
 ros2 topic list | grep mavros
@@ -268,7 +252,7 @@ If a future MAVROS release removes that transform, set
 | Drone moves opposite on y/z/yaw | FLU/FRD applied twice — see "Frame conventions". |
 | Arm service call hangs and times out | The bridge is on a single-threaded executor. Use `component_container_mt` or the standalone `mavlink_bridge_node` executable. |
 | `mavros_node: error while loading shared libraries: libdiagnostic_updater.so: ...` | A MAVROS system dependency is missing or was left half-installed. `sudo apt install --reinstall ros-humble-diagnostic-updater ros-humble-mavros ros-humble-mavros-extras && sudo ldconfig`, then confirm with `ldd $(ros2 pkg prefix mavros)/lib/mavros/mavros_node \| grep "not found"` (should print nothing). |
-| `mavros_node` dies with `create_subscription() ... existing topic name ... incompatible type` then `terminate called after throwing ... invalid allocator` | A plugin collides on startup — the companion-process-status plugin has been observed doing this on some builds. Not a J10 bug; `config/mavros_apm.yaml` denylists it with a `companion*` glob (plugin id strings have differed across MAVROS releases) and otherwise mirrors MAVROS's own stock ArduPilot `plugin_denylist`. If the error names a *different* topic/type after that, find the owning plugin from the type name and add its id (or a glob) to `plugin_denylist` too — `strings $(ros2 pkg prefix mavros_extras)/lib/libmavros_extras_plugins.so \| grep -i <keyword>` on the actual installed `.so` will show the real registered id if it's unclear from upstream source. |
+| `mavros_node` dies with `create_publisher()`/`create_subscription() ... existing topic name ... incompatible type` then `terminate called after throwing ... invalid allocator` | Two different stock plugins are colliding on the same relative topic name (seen with `companion_process_status` and `esc_status`, both reusing `~/status`) — not a J10 bug. `config/mavros_apm.yaml` already works around the whole class of this by loading only five plugins via `plugin_allowlist` rather than denylisting offenders one at a time; if you've added a plugin back to that list and hit this, see "MAVROS plugin allowlist" above for how to find the real id from the running binary rather than guessing from source. |
 
 ---
 

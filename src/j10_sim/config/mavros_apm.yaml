@@ -28,3 +28,25 @@
     sys:
       min_voltage: [10.0]
       disable_diag: false
+
+    # MAVROS's own official ArduPilot plugin list (mavros/launch/apm_pluginlists.yaml)
+    # denylists these because they don't apply to ArduPilot, are PX4-only, or aren't used.
+    # 'companion_process' is an addition beyond stock: it has been observed crashing
+    # mavros_node on startup with "create_subscription() called for existing topic name
+    # ... with incompatible type" on some builds. None of these are needed for Phase 1 —
+    # state, local_position, battery, rangefinder, setpoint_raw, estimator_status and
+    # command all load normally. Re-enable px4flow only once the real MTF-01 flow path is
+    # exercised (Phase 6); vehicle_state_node already treats an absent topic as flow_valid
+    # staying false rather than an error.
+    plugin_denylist:
+      - actuator_control
+      - ftp
+      - hil
+      - altitude
+      - debug_value
+      - image_pub
+      - px4flow
+      - vibration
+      - vision_speed_estimate
+      - wheel_odometry
+      - companion_process

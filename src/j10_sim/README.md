@@ -218,6 +218,8 @@ If a future MAVROS release removes that transform, set
 | Drone twitches once per second and stops | `ros2 topic pub` without `-r 30`. |
 | Drone moves opposite on y/z/yaw | FLU/FRD applied twice — see "Frame conventions". |
 | Arm service call hangs and times out | The bridge is on a single-threaded executor. Use `component_container_mt` or the standalone `mavlink_bridge_node` executable. |
+| `mavros_node: error while loading shared libraries: libdiagnostic_updater.so: ...` | A MAVROS system dependency is missing or was left half-installed. `sudo apt install --reinstall ros-humble-diagnostic-updater ros-humble-mavros ros-humble-mavros-extras && sudo ldconfig`, then confirm with `ldd $(ros2 pkg prefix mavros)/lib/mavros/mavros_node \| grep "not found"` (should print nothing). |
+| `mavros_node` dies with `create_subscription() ... existing topic name ... incompatible type` then `terminate called after throwing ... invalid allocator` | A plugin collides on startup — `companion_process` has been observed doing this on some builds. Not a J10 bug; `config/mavros_apm.yaml` denylists it and mirrors MAVROS's own stock ArduPilot `plugin_denylist`. If a *different* plugin name appears in the error, add it to `plugin_denylist` too. |
 
 ---
 

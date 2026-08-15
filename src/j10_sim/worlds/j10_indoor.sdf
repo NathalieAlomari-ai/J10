@@ -1,0 +1,213 @@
+<?xml version="1.0" ?>
+<!--
+  J10 indoor test world.
+
+  An 8 x 8 x 3 m room with a doorway gap in the north wall, plus the ArduPilot-enabled iris
+  quadrotor. The doorway exists so later phases have a real "fly through the opening"
+  target; Phase 1 only needs the vehicle to move in the commanded direction.
+
+  The iris model comes from ArduPilot/ardupilot_gazebo (see j10.repos). GZ_SIM_RESOURCE_PATH
+  must include that repository's models/ and worlds/ directories — sitl.launch.py sets this
+  from the ARDUPILOT_GAZEBO argument.
+
+  Note on optical flow: ArduPilot SITL synthesises flow from its own physics state when
+  SIM_FLOW_ENABLE=1, so the floor here does not need a texture for flow to fuse. The visual
+  grid is for the operator, not for the estimator.
+-->
+<sdf version="1.9">
+  <world name="j10_indoor">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6.0e-06 2.3e-05 -4.2e-05</magnetic_field>
+
+    <!-- ArduPilot SITL expects a defined origin even with GPS disabled. -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>-35.3632621</latitude_deg>
+      <longitude_deg>149.1652374</longitude_deg>
+      <elevation>10.0</elevation>
+    </spherical_coordinates>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.75 0.78 0.82 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Fill light so the room interior is not in shadow once walls are up. -->
+    <light type="point" name="room_light">
+      <pose>0 0 2.8 0 0 0</pose>
+      <diffuse>0.6 0.6 0.6 1</diffuse>
+      <specular>0.1 0.1 0.1 1</specular>
+      <attenuation>
+        <range>20</range>
+        <constant>0.4</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+      <cast_shadows>false</cast_shadows>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.35 0.35 0.38 1</ambient>
+            <diffuse>0.45 0.45 0.48 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      Room shell. Walls are 0.15 m thick, 3 m tall, enclosing 8 x 8 m.
+      The north wall (+y) is split into two segments leaving a 1.2 m doorway on centre.
+    -->
+    <model name="room">
+      <static>true</static>
+      <link name="walls">
+
+        <!-- South wall, y = -4 -->
+        <collision name="south_collision">
+          <pose>0 -4 1.5 0 0 0</pose>
+          <geometry><box><size>8.15 0.15 3</size></box></geometry>
+        </collision>
+        <visual name="south_visual">
+          <pose>0 -4 1.5 0 0 0</pose>
+          <geometry><box><size>8.15 0.15 3</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.68 1</ambient>
+            <diffuse>0.85 0.85 0.82 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- West wall, x = -4 -->
+        <collision name="west_collision">
+          <pose>-4 0 1.5 0 0 0</pose>
+          <geometry><box><size>0.15 8.15 3</size></box></geometry>
+        </collision>
+        <visual name="west_visual">
+          <pose>-4 0 1.5 0 0 0</pose>
+          <geometry><box><size>0.15 8.15 3</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.68 1</ambient>
+            <diffuse>0.85 0.85 0.82 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- East wall, x = +4 -->
+        <collision name="east_collision">
+          <pose>4 0 1.5 0 0 0</pose>
+          <geometry><box><size>0.15 8.15 3</size></box></geometry>
+        </collision>
+        <visual name="east_visual">
+          <pose>4 0 1.5 0 0 0</pose>
+          <geometry><box><size>0.15 8.15 3</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.68 1</ambient>
+            <diffuse>0.85 0.85 0.82 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- North wall west segment: spans x = -4.075 .. -0.6 -->
+        <collision name="north_west_collision">
+          <pose>-2.3375 4 1.5 0 0 0</pose>
+          <geometry><box><size>3.475 0.15 3</size></box></geometry>
+        </collision>
+        <visual name="north_west_visual">
+          <pose>-2.3375 4 1.5 0 0 0</pose>
+          <geometry><box><size>3.475 0.15 3</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.68 1</ambient>
+            <diffuse>0.85 0.85 0.82 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- North wall east segment: spans x = 0.6 .. 4.075 -->
+        <collision name="north_east_collision">
+          <pose>2.3375 4 1.5 0 0 0</pose>
+          <geometry><box><size>3.475 0.15 3</size></box></geometry>
+        </collision>
+        <visual name="north_east_visual">
+          <pose>2.3375 4 1.5 0 0 0</pose>
+          <geometry><box><size>3.475 0.15 3</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.68 1</ambient>
+            <diffuse>0.85 0.85 0.82 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- Lintel above the doorway: 1.2 m opening, 2.1 m clear height -->
+        <collision name="north_lintel_collision">
+          <pose>0 4 2.55 0 0 0</pose>
+          <geometry><box><size>1.2 0.15 0.9</size></box></geometry>
+        </collision>
+        <visual name="north_lintel_visual">
+          <pose>0 4 2.55 0 0 0</pose>
+          <geometry><box><size>1.2 0.15 0.9</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.68 1</ambient>
+            <diffuse>0.85 0.85 0.82 1</diffuse>
+          </material>
+        </visual>
+
+      </link>
+    </model>
+
+    <!--
+      ArduPilot-enabled iris. The ArduPilotPlugin inside this model opens the JSON physics
+      backend that ArduPilot SITL connects to; see scripts/run_sitl.sh for the invocation.
+
+      Spawned at the room centre, offset in -y so there is clear space toward the doorway.
+    -->
+    <include>
+      <uri>model://iris_with_ardupilot</uri>
+      <name>iris</name>
+      <pose>0 -2 0.195 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

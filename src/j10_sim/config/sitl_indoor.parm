@@ -1,0 +1,52 @@
+# ArduCopter SITL parameters for indoor, GPS-denied flight on simulated optical flow and
+# rangefinder. Loaded by scripts/run_sitl.sh via sim_vehicle.py --add-param-file.
+#
+# This mirrors docs/ARCHITECTURE.md section 7. It is the SITL block only — the real MTF-01
+# over MSP uses the same EK3_SRC1_* lines with different sensor type IDs, and those must be
+# checked against the current ArduPilot MTF-01 wiki page before first flight.
+
+# --- EKF3 on, GPS off -------------------------------------------------------------------
+AHRS_EKF_TYPE   3
+EK3_ENABLE      1
+GPS_TYPE        0
+
+# Source set 1: horizontal position/velocity from optical flow, vertical from rangefinder.
+EK3_SRC1_POSXY  0
+EK3_SRC1_VELXY  5
+EK3_SRC1_POSZ   2
+EK3_SRC1_VELZ   0
+EK3_SRC1_YAW    1
+
+# --- Simulated optical flow -------------------------------------------------------------
+SIM_FLOW_ENABLE 1
+FLOW_TYPE       10
+
+# --- Simulated rangefinder --------------------------------------------------------------
+RNGFND1_TYPE    100
+RNGFND1_ORIENT  25
+RNGFND1_MIN_CM  5
+RNGFND1_MAX_CM  800
+SIM_SONAR_SCALE 10
+
+# --- Arming and failsafes for a bench SITL run ------------------------------------------
+# Indoors there is no GPS and no RC transmitter attached to SITL, so the corresponding
+# prearm checks and failsafes would block every test. These relaxations are SITL-only and
+# must NOT be carried into a real airframe parameter set.
+ARMING_CHECK    0
+FS_THR_ENABLE   0
+FS_GCS_ENABLE   0
+BRD_SAFETYENABLE 0
+
+# --- Guided mode behaviour ---------------------------------------------------------------
+# The bridge streams setpoints at 30 Hz continuously, so this timeout should never trip.
+# Left at the default value explicitly so a change in ArduPilot defaults is visible here.
+GUID_TIMEOUT    3
+
+# Conservative indoor envelope. The safety filter enforces its own limits independently in
+# Phase 2; these are the flight controller's backstop.
+PILOT_SPEED_UP  100
+PILOT_SPEED_DN  100
+WPNAV_SPEED     150
+WPNAV_SPEED_UP  100
+WPNAV_SPEED_DN  100
+ANGLE_MAX       1500

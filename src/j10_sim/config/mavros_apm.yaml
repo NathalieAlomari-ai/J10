@@ -1,0 +1,30 @@
+# Minimal MAVROS configuration for ArduPilot SITL.
+#
+# Kept deliberately small. MAVROS ships a full apm_config.yaml with per-plugin tuning; the
+# only values Phase 1 actually needs are the link and the target IDs, and a short list
+# keeps it obvious what we changed.
+#
+# The wildcard key applies regardless of the node name mavros_node is launched under.
+
+/**:
+  ros__parameters:
+    # sim_vehicle.py's MAVProxy forwards to 127.0.0.1:14550 and :14551 by default.
+    # run_sitl.sh adds an explicit --out for 14551; MAVROS binds it and learns the remote
+    # endpoint from the first packet.
+    fcu_url: "udp://:14551@"
+    gcs_url: ""
+
+    target_system_id: 1
+    target_component_id: 1
+
+    fcu_protocol: "v2.0"
+
+    # ArduPilot streams these at whatever rate the FC is configured for; asking for a rate
+    # here keeps /mavros/local_position/* fast enough to feed a 20 Hz VehicleState.
+    conn:
+      timeout: 10.0
+      heartbeat_rate: 1.0
+
+    sys:
+      min_voltage: [10.0]
+      disable_diag: false

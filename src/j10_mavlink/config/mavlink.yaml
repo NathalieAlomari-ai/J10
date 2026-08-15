@@ -1,0 +1,66 @@
+# Parameters for the j10_mavlink nodes.
+#
+# The node-name keys below match the container-composed names as well as the standalone
+# executables, since both construct the nodes with their default names.
+
+mavlink_bridge_node:
+  ros__parameters:
+    # --- Setpoint stream ---
+    # ArduPilot's guided failsafe trips on setpoint silence, so this stream never stops,
+    # armed or not.
+    setpoint_rate_hz: 30.0
+
+    # How long a /j10/cmd_vel_safe message stays valid. Past this the bridge publishes zero
+    # velocity — hover — rather than repeating the last command. At 30 Hz input, 300 ms is
+    # ~9 missed messages, and it satisfies the Phase 1 exit criterion of returning to hover
+    # within 1 s of the command stopping.
+    command_timeout_sec: 0.3
+
+    # --- Frame convention ---
+    # 'flu' passes the ROS body-FLU twist straight through, which is correct for
+    # mavros_msgs/PositionTarget with FRAME_BODY_NED: the MAVROS setpoint_raw plugin applies
+    # FLU->FRD itself. Set to 'frd' only if a MAVROS change ever removes that transform.
+    body_frame_convention: "flu"
+
+    # --- Last-ditch saturation ---
+    # Defence in depth, NOT a substitute for j10_safety, which remains the only node with
+    # authority to veto. Deliberately wide so it never binds in normal operation; if it does
+    # bind, something upstream of the safety filter is broken and the log will say so.
+    absolute_max_linear_mps: 2.0
+    absolute_max_yaw_rate_rps: 1.5
+
+    # --- Mode, arming, takeoff ---
+    guided_mode: "GUIDED"
+    takeoff_altitude_m: 1.5
+    takeoff_timeout_sec: 30.0
+    # ArduPilot runs its own guided takeoff controller; a velocity setpoint during the climb
+    # overrides it and the vehicle stays on the ground.
+    suppress_setpoints_during_takeoff: true
+
+    require_ekf_healthy_to_arm: true
+    # SITL-only escape hatch. Must stay false against a real autopilot.
+    allow_force_arm: false
+
+    service_timeout_sec: 5.0
+    state_timeout_sec: 1.0
+
+vehicle_state_node:
+  ros__parameters:
+    publish_rate_hz: 20.0
+    frame_id: "map"
+
+    pose_timeout_sec: 0.5
+    rangefinder_timeout_sec: 0.5
+    flow_timeout_sec: 0.5
+    estimator_timeout_sec: 2.0
+
+    # MTF-01 single-point LiDAR band. Readings outside it are reported invalid rather than
+    # passed on as a number that looks usable.
+    rangefinder_min_range_m: 0.05
+    rangefinder_max_range_m: 8.0
+
+    flow_quality_threshold: 0.2
+
+    # Indoors there is no GPS, so absolute horizontal position is never solved. Requiring it
+    # would pin ekf_healthy to false and block arming forever.
+    require_pos_horiz_abs: false

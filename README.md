@@ -63,8 +63,25 @@ source install/setup.bash
 
 ## Status
 
-Phase 0 of 7 — foundation. `j10_interfaces` defines the contract; node packages land in
-build order (see `docs/ARCHITECTURE.md` §9).
+Phase 1 of 7 — SITL + MAVROS loopback. `j10_interfaces` defines the contract, and
+`j10_mavlink` + `j10_sim` bring up ArduCopter SITL in Gazebo with a hand-published velocity
+command. Remaining packages land in build order (see `docs/ARCHITECTURE.md` §9).
+
+**Runbook: [`src/j10_sim/README.md`](src/j10_sim/README.md)** — prerequisites, bring-up, and
+the Phase 1 exit test.
+
+```bash
+ros2 launch j10_sim sitl.launch.py
+ros2 service call /j10/vehicle/arm j10_interfaces/srv/ArmDisarm "{arm: true}"
+ros2 service call /j10/vehicle/takeoff std_srvs/srv/Trigger "{}"
+
+# fly it — note -r 30; the bridge decays to hover 300 ms after the last command
+ros2 topic pub -r 30 /j10/cmd_vel_safe geometry_msgs/msg/TwistStamped \
+  "{header: {frame_id: 'base_link'}, twist: {linear: {x: 0.5}}}"
+```
+
+`/j10/cmd_vel_safe` is a **body-FLU** twist: x forward, y left, z up, angular.z
+counter-clockwise.
 
 ## Safety
 

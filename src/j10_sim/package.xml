@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>j10_sim</name>
+  <version>0.1.0</version>
+  <description>
+    Gazebo worlds, ArduPilot SITL parameters and launch files for simulating the J10
+    vehicle. Per boundary rule 4 in docs/ARCHITECTURE.md this package is never a runtime
+    dependency of anything — it exists only for SITL.
+
+    Gazebo itself and the ArduPilot source tree are external prerequisites and are not
+    rosdep keys, so they are documented in README.md rather than declared here.
+  </description>
+  <maintainer email="info@jnhsystems.com">JNH Systems</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>j10_mavlink</exec_depend>
+  <exec_depend>mavros</exec_depend>
+  <exec_depend>mavros_extras</exec_depend>
+  <exec_depend>mavros_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

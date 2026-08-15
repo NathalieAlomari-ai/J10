@@ -1,0 +1,32 @@
+# ROS 2 / colcon
+build/
+install/
+log/
+.colcon*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ROS bags
+*.bag
+*.db3
+*.mcap
+rosbag2_*/
+
+# Model weights — never commit checkpoints
+*.pt
+*.pth
+*.onnx
+*.engine
+*.safetensors
+models/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

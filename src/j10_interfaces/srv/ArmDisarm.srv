@@ -1,0 +1,14 @@
+# Arm or disarm the vehicle through the MAVLink bridge.
+#
+# Arming is refused unless the bridge is streaming setpoints and the vehicle reports a
+# healthy EKF. Disarm is always honoured.
+
+bool arm
+
+# Force the request even if preflight checks fail. Ignored for disarm, which never needs it.
+# SITL only — the bridge refuses this against a real autopilot.
+bool force false
+---
+bool success
+string message
+bool armed          # actual arming state after the call

@@ -1,0 +1,14 @@
+# Set the natural-language instruction the VLA acts on.
+#
+# The mission manager republishes the accepted instruction on a latched topic so the VLA
+# node picks it up even if it starts or restarts after the instruction was issued.
+
+# e.g. "fly toward the doorway", "follow the corridor left"
+string instruction
+
+# Apply immediately, discarding the in-flight intent. When false, the new instruction takes
+# effect after the current intent expires — smoother, but slower to take.
+bool immediate true
+---
+bool success
+string message

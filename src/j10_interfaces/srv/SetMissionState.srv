@@ -1,0 +1,24 @@
+# Request a transition of the mission state machine.
+#
+# The manager validates the transition against the current state and vehicle health, and
+# rejects anything illegal. It cannot bypass the safety filter under any circumstance.
+
+string STATE_IDLE=IDLE
+string STATE_PREFLIGHT=PREFLIGHT
+string STATE_ARMED=ARMED
+string STATE_TAKEOFF=TAKEOFF
+string STATE_VLA_ACTIVE=VLA_ACTIVE
+string STATE_HOLD=HOLD
+string STATE_LAND=LAND
+string STATE_DISARM=DISARM
+
+# Target state, one of STATE_* above
+string state
+
+# Skip preflight checks. Intended for SITL only; the manager refuses this on a vehicle
+# reporting a real (non-simulated) autopilot.
+bool force false
+---
+bool success
+string message          # on failure, why the transition was rejected
+string current_state     # state after the call, whether or not it succeeded

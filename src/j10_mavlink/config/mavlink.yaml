@@ -5,6 +5,24 @@
 
 mavlink_bridge_node:
   ros__parameters:
+    # --- MAVROS topic and service names ---
+    # Note the doubled "mavros/mavros" on the setpoint topic. That is not a typo: the
+    # setpoint_raw plugin declares its subscription as "~/local", which resolves against
+    # the UAS node's fully-qualified name, and the conventional MAVROS launch names the
+    # node "mavros" inside namespace "mavros". Plugins that use plain relative names
+    # (sys_status) land one level up at /mavros/* instead — hence the mix below.
+    #
+    # Getting the setpoint topic wrong fails SILENTLY: the publisher is created, the topic
+    # shows up in `ros2 topic list`, and the vehicle simply never moves. If the vehicle
+    # arms and takes off but ignores /j10/cmd_vel_safe, check this first with
+    # `ros2 topic info <setpoint_topic>` and confirm it reports a subscriber.
+    setpoint_topic: "/mavros/mavros/local"
+    cmd_vel_topic: "/j10/cmd_vel_safe"
+    vehicle_state_topic: "/j10/vehicle/state"
+    set_mode_service: "/mavros/set_mode"
+    arming_service: "/mavros/cmd/arming"
+    takeoff_service: "/mavros/cmd/takeoff"
+
     # --- Setpoint stream ---
     # ArduPilot's guided failsafe trips on setpoint silence, so this stream never stops,
     # armed or not.
@@ -46,6 +64,23 @@ mavlink_bridge_node:
 
 vehicle_state_node:
   ros__parameters:
+    # --- MAVROS source topics ---
+    # The split between /mavros/* and /mavros/mavros/* is MAVROS's, not ours — see the
+    # note in the mavlink_bridge_node block above. Subscribing to the wrong name fails
+    # silently: the field just stays at its default forever while staleness_sec looks
+    # healthy (because another source is fresh). If pose/velocity stay zero with a zero
+    # timestamp, verify with `ros2 topic info <topic>` that a *publisher* exists — a
+    # topic listed by `ros2 topic list` may only have our subscriber on it.
+    state_topic: "/mavros/state"
+    pose_topic: "/mavros/mavros/pose"
+    velocity_topic: "/mavros/mavros/velocity_local"
+    battery_topic: "/mavros/battery"
+    rangefinder_topic: "/mavros/mavros/rangefinder"
+    estimator_status_topic: "/mavros/estimator_status"
+    # Not published while px4flow is out of the plugin allowlist; harmless, flow_valid
+    # simply stays false. See src/j10_sim/config/mavros_apm.yaml.
+    flow_topic: "/mavros/px4flow/raw/optical_flow_rad"
+
     publish_rate_hz: 20.0
     frame_id: "map"
 

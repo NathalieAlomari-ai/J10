@@ -58,11 +58,33 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
   service_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   client_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
+  // --- Topic and service names ---
+  //
+  // Parameters, because MAVROS's own naming is not uniform. The setpoint_raw plugin
+  // declares its subscription as "~/local", which resolves against the UAS node's
+  // fully-qualified name -- /mavros/mavros under the conventional launch (node named
+  // "mavros" inside namespace "mavros"). Publishing to /mavros/setpoint_raw/local instead
+  // fails *silently*: the publisher is created, the topic appears in `ros2 topic list`,
+  // and the flight controller simply never receives a setpoint. Verified against
+  // `ros2 topic list` on a live connection.
+  const auto setpoint_topic =
+    declare_parameter("setpoint_topic", std::string("/mavros/mavros/local"));
+  const auto cmd_vel_topic =
+    declare_parameter("cmd_vel_topic", std::string("/j10/cmd_vel_safe"));
+  const auto vehicle_state_topic =
+    declare_parameter("vehicle_state_topic", std::string("/j10/vehicle/state"));
+  const auto set_mode_service =
+    declare_parameter("set_mode_service", std::string("/mavros/set_mode"));
+  const auto arming_service =
+    declare_parameter("arming_service", std::string("/mavros/cmd/arming"));
+  const auto takeoff_service =
+    declare_parameter("takeoff_service", std::string("/mavros/cmd/takeoff"));
+
   // --- Publisher ---
   // RELIABLE because the MAVROS setpoint_raw subscription is reliable; a BEST_EFFORT
   // publisher would be silently incompatible and no setpoint would ever arrive.
   setpoint_pub_ = create_publisher<mavros_msgs::msg::PositionTarget>(
-    "/mavros/setpoint_raw/local", rclcpp::QoS(10).reliable());
+    setpoint_topic, rclcpp::QoS(10).reliable());
 
   // --- Subscriptions ---
   rclcpp::SubscriptionOptions sub_options;
@@ -71,12 +93,12 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
   // Per the topic contract: BEST_EFFORT / KEEP_LAST(1). On a control loop a late command is
   // worse than a dropped one.
   cmd_vel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
-    "/j10/cmd_vel_safe", rclcpp::QoS(1).best_effort(),
+    cmd_vel_topic, rclcpp::QoS(1).best_effort(),
     std::bind(&MavlinkBridgeNode::onCmdVel, this, std::placeholders::_1),
     sub_options);
 
   vehicle_state_sub_ = create_subscription<j10_interfaces::msg::VehicleState>(
-    "/j10/vehicle/state", rclcpp::QoS(5).reliable(),
+    vehicle_state_topic, rclcpp::QoS(5).reliable(),
     std::bind(&MavlinkBridgeNode::onVehicleState, this, std::placeholders::_1),
     sub_options);
 
@@ -101,11 +123,11 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
 
   // --- MAVROS clients ---
   set_mode_client_ = create_client<mavros_msgs::srv::SetMode>(
-    "/mavros/set_mode", rmw_qos_profile_services_default, client_group_);
+    set_mode_service, rmw_qos_profile_services_default, client_group_);
   arming_client_ = create_client<mavros_msgs::srv::CommandBool>(
-    "/mavros/cmd/arming", rmw_qos_profile_services_default, client_group_);
+    arming_service, rmw_qos_profile_services_default, client_group_);
   takeoff_client_ = create_client<mavros_msgs::srv::CommandTOL>(
-    "/mavros/cmd/takeoff", rmw_qos_profile_services_default, client_group_);
+    takeoff_service, rmw_qos_profile_services_default, client_group_);
 
   // --- Setpoint timer ---
   setpoint_timer_ = create_wall_timer(
@@ -122,6 +144,11 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
     toString(params_.body_frame_convention),
     static_cast<unsigned>(kVelocityYawRateTypeMask),
     static_cast<unsigned>(mavros_msgs::msg::PositionTarget::FRAME_BODY_NED));
+
+  RCLCPP_INFO(
+    get_logger(), "  %s -> %s | services: %s %s %s",
+    cmd_vel_topic.c_str(), setpoint_topic.c_str(), set_mode_service.c_str(),
+    arming_service.c_str(), takeoff_service.c_str());
 
   if (params_.allow_force_arm) {
     RCLCPP_WARN(

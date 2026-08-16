@@ -35,6 +35,33 @@ VehicleStateNode::VehicleStateNode(const rclcpp::NodeOptions & options)
   // would make ekf_healthy permanently false and block arming.
   require_pos_horiz_abs_ = declare_parameter("require_pos_horiz_abs", false);
 
+  // --- Source topic names ---
+  //
+  // These are parameters, and the defaults are NOT uniform, because MAVROS itself is not
+  // uniform. Plugins that declare their topics with a "~/" prefix resolve against the UAS
+  // node's fully-qualified name, which is /mavros/mavros under the conventional launch
+  // (node named "mavros" inside namespace "mavros" -- see mavros/launch/node.launch). So
+  // local_position, rangefinder and setpoint_raw land under /mavros/mavros/*. The
+  // sys_status plugin uses plain relative names instead, so its topics land under
+  // /mavros/* one level up. Verified empirically against `ros2 topic list` on a live
+  // connection rather than assumed -- getting this wrong is silent: the subscription is
+  // created successfully, the topic shows up in `ros2 topic list` because a subscriber
+  // exists, and no data ever arrives.
+  const auto state_topic =
+    declare_parameter("state_topic", std::string("/mavros/state"));
+  const auto pose_topic =
+    declare_parameter("pose_topic", std::string("/mavros/mavros/pose"));
+  const auto velocity_topic =
+    declare_parameter("velocity_topic", std::string("/mavros/mavros/velocity_local"));
+  const auto battery_topic =
+    declare_parameter("battery_topic", std::string("/mavros/battery"));
+  const auto rangefinder_topic =
+    declare_parameter("rangefinder_topic", std::string("/mavros/mavros/rangefinder"));
+  const auto estimator_status_topic =
+    declare_parameter("estimator_status_topic", std::string("/mavros/estimator_status"));
+  const auto flow_topic = declare_parameter(
+    "flow_topic", std::string("/mavros/px4flow/raw/optical_flow_rad"));
+
   state_pub_ = create_publisher<j10_interfaces::msg::VehicleState>(
     "/j10/vehicle/state", rclcpp::QoS(5).reliable());
 
@@ -44,14 +71,14 @@ VehicleStateNode::VehicleStateNode(const rclcpp::NodeOptions & options)
   const auto status_qos = rclcpp::QoS(10).reliable();
 
   mav_state_sub_ = create_subscription<mavros_msgs::msg::State>(
-    "/mavros/state", status_qos,
+    state_topic, status_qos,
     [this](const mavros_msgs::msg::State::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       mav_state_.set(*msg, now());
     });
 
   pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-    "/mavros/local_position/pose", sensor_qos,
+    pose_topic, sensor_qos,
     [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       pose_.set(*msg, now());
@@ -60,28 +87,28 @@ VehicleStateNode::VehicleStateNode(const rclcpp::NodeOptions & options)
   // velocity_local is the ENU local-frame twist, which is what the VehicleState contract
   // asks for. velocity_body (FLU) is deliberately not used here.
   velocity_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
-    "/mavros/local_position/velocity_local", sensor_qos,
+    velocity_topic, sensor_qos,
     [this](const geometry_msgs::msg::TwistStamped::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       velocity_.set(*msg, now());
     });
 
   battery_sub_ = create_subscription<sensor_msgs::msg::BatteryState>(
-    "/mavros/battery", sensor_qos,
+    battery_topic, sensor_qos,
     [this](const sensor_msgs::msg::BatteryState::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       battery_.set(*msg, now());
     });
 
   rangefinder_sub_ = create_subscription<sensor_msgs::msg::Range>(
-    "/mavros/rangefinder/rangefinder", sensor_qos,
+    rangefinder_topic, sensor_qos,
     [this](const sensor_msgs::msg::Range::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       rangefinder_.set(*msg, now());
     });
 
   estimator_sub_ = create_subscription<mavros_msgs::msg::EstimatorStatus>(
-    "/mavros/estimator_status", status_qos,
+    estimator_status_topic, status_qos,
     [this](const mavros_msgs::msg::EstimatorStatus::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       estimator_.set(*msg, now());
@@ -92,7 +119,7 @@ VehicleStateNode::VehicleStateNode(const rclcpp::NodeOptions & options)
   // never be published, in which case flow_valid simply stays false. Phase 1 does not
   // depend on it — the MTF-01 flow path is exercised properly in Phase 6.
   flow_sub_ = create_subscription<mavros_msgs::msg::OpticalFlowRad>(
-    "/mavros/px4flow/raw/optical_flow_rad", sensor_qos,
+    flow_topic, sensor_qos,
     [this](const mavros_msgs::msg::OpticalFlowRad::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       flow_.set(*msg, now());
@@ -105,6 +132,11 @@ VehicleStateNode::VehicleStateNode(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(
     get_logger(), "vehicle_state_node up: publishing /j10/vehicle/state at %.1f Hz",
     publish_rate_hz_);
+  RCLCPP_INFO(
+    get_logger(),
+    "  sources: state=%s pose=%s velocity=%s battery=%s rangefinder=%s estimator=%s",
+    state_topic.c_str(), pose_topic.c_str(), velocity_topic.c_str(),
+    battery_topic.c_str(), rangefinder_topic.c_str(), estimator_status_topic.c_str());
 }
 
 void VehicleStateNode::onPublishTimer()

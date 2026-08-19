@@ -1,0 +1,71 @@
+# Safety envelope for the J10 vehicle.
+#
+# These are the limits the safety filter enforces on EVERY command before it reaches the
+# flight controller, whatever produced it. The VLA model's output is not trusted, and
+# neither is the motion controller's -- this is the last thing between a bad command and
+# the aircraft.
+#
+# The values below are the Phase 7 "tethered indoor flight" envelope from
+# docs/ARCHITECTURE.md: conservative on purpose. Expand only after each envelope has flown
+# clean, and expand one limit at a time.
+
+safety_filter_node:
+  ros__parameters:
+    rate_hz: 30.0
+    frame_id: "base_link"
+
+    # Autonomy starts OFF. The mission manager enables it explicitly, so restarting this
+    # node mid-flight can never silently re-authorise the model.
+    autonomy_enabled_on_start: false
+
+    # --- Absolute speed ceilings ---
+    max_horizontal_mps: 0.3
+    max_vertical_mps: 0.3
+    max_yaw_rate_rps: 0.5
+
+    # --- Acceleration ---
+    # Deceleration is deliberately much larger than acceleration: slowing down is always
+    # the safer direction, and rate-limiting a brake would defeat the point of braking.
+    max_accel_mps2: 0.5
+    max_decel_mps2: 1.5
+    max_yaw_accel_rps2: 1.0
+
+    # --- Altitude envelope, metres AGL ---
+    # The rangefinder is preferred over EKF z when it is valid: it is a direct measurement
+    # where EKF z is an integrated estimate that drifts, and indoors that drift is what
+    # puts a vehicle into the floor.
+    min_altitude_m: 0.3
+    max_altitude_m: 1.5
+    altitude_margin_m: 0.3
+
+    # --- Virtual geofence: axis-aligned box in the ENU local frame, metres from origin ---
+    # 2x2 m box, matching the Phase 7 conservative envelope.
+    geofence_enabled: true
+    geofence_min_x: -1.0
+    geofence_max_x: 1.0
+    geofence_min_y: -1.0
+    geofence_max_y: 1.0
+    geofence_margin_m: 0.4
+
+    # --- Ground proximity, from the downward rangefinder ---
+    proximity_stop_m: 0.25
+    proximity_slow_m: 0.6
+
+    # --- Battery failsafe, as a fraction. Negative reported charge means "unknown" and is
+    # NOT treated as empty -- SITL reports no battery at all. ---
+    battery_warn_fraction: 0.25
+    battery_land_fraction: 0.15
+    land_speed_mps: 0.3
+
+    # --- Input freshness watchdogs ---
+    # command_timeout matches the bridge's own 300 ms: at 30 Hz input that is ~9 missed
+    # messages, and it keeps the whole chain's loss-of-input behaviour consistent.
+    command_timeout_sec: 0.3
+    state_timeout_sec: 0.5
+    video_timeout_sec: 0.5
+    # Loss of video blinds the VLA, so its output stops being trusted. A human on the
+    # deadman is deliberately unaffected -- they do not need the video link to fly.
+    #
+    # Set false until Phase 3 lands j10_video: with no StreamStatus publisher on the graph
+    # this would otherwise hold the vehicle permanently.
+    video_loss_stops_autonomy: false

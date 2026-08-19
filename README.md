@@ -63,9 +63,11 @@ source install/setup.bash
 
 ## Status
 
-Phase 1 of 7 — SITL + MAVROS loopback. `j10_interfaces` defines the contract, and
-`j10_mavlink` + `j10_sim` bring up ArduCopter SITL in Gazebo with a hand-published velocity
-command. Remaining packages land in build order (see `docs/ARCHITECTURE.md` §9).
+Phase 1–2 of 7. `j10_interfaces` defines the contract, `j10_mavlink` + `j10_sim` bring up
+ArduCopter SITL in Gazebo with a hand-published velocity command, and `j10_safety` enforces
+the envelope on every command before it reaches the flight controller — **39 unit tests,
+no simulator required, 3 ms to run.** Remaining packages land in build order (see
+`docs/ARCHITECTURE.md` §9).
 
 **Runbook: [`src/j10_sim/README.md`](src/j10_sim/README.md)** — prerequisites, bring-up, and
 the Phase 1 exit test.

@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>j10_safety</name>
+  <version>0.1.0</version>
+  <description>
+    The independent guardian: the only component with authority to veto a command before it
+    reaches the flight controller. Applies input watchdogs, velocity clamps, acceleration
+    limits, an altitude envelope, a virtual geofence, ground-proximity braking and a
+    battery failsafe, and publishes a SafetyStatus naming every limit that was active.
+
+    Per boundary rule 3 in docs/ARCHITECTURE.md this package depends only on
+    j10_interfaces and geometry_msgs, and the filter logic itself is pure C++ that is
+    unit-testable with no simulator, no MAVROS and no GPU.
+  </description>
+  <maintainer email="info@jnhsystems.com">JNH Systems</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>j10_interfaces</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

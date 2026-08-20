@@ -21,6 +21,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
     IncludeLaunchDescription,
+    OpaqueFunction,
     TimerAction,
 )
 from launch.conditions import IfCondition
@@ -28,6 +29,10 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+
+def _is_true(value):
+    return str(value).strip().lower() in ('true', '1', 'yes', 'on')
 
 
 def generate_launch_description():
@@ -55,6 +60,18 @@ def generate_launch_description():
         DeclareLaunchArgument('j10', default_value='true',
                               description='Start mavlink_bridge_node and '
                                           'vehicle_state_node.'),
+
+        DeclareLaunchArgument(
+            'extnav', default_value='false',
+            description='GPS-denied on a SIMULATED EXTERNAL NAV source (ArduPilot\'s '
+                        'simulated vicon device) instead of optical flow. Loads '
+                        'sitl_extnav.parm. This is the fast path to a working arm and '
+                        'hover; the optical-flow path in sitl_indoor.parm stays the '
+                        'hardware-faithful target.'),
+        DeclareLaunchArgument(
+            'sitl_params', default_value='',
+            description='Explicit ArduPilot parameter file. Empty means sitl_extnav.parm '
+                        'when extnav:=true, otherwise sitl_indoor.parm.'),
 
         DeclareLaunchArgument('headless', default_value='false',
                               description='Run Gazebo without a GUI.'),
@@ -105,22 +122,33 @@ def generate_launch_description():
     # --- ArduPilot SITL -------------------------------------------------------------------
     # Started after Gazebo: ArduPilot's JSON backend connects out to the ArduPilotPlugin and
     # gives up if nothing is listening.
+    #
+    # Built inside an OpaqueFunction rather than declared directly, because which parameter
+    # file to load and whether to attach the simulated external-nav device both depend on
+    # the resolved value of extnav, and a LaunchConfiguration cannot be branched on until
+    # the context exists.
+    def _sitl_process(context, *_args, **_kwargs):
+        use_extnav = _is_true(LaunchConfiguration('extnav').perform(context))
+        params = LaunchConfiguration('sitl_params').perform(context)
+        if not params:
+            params = os.path.join(
+                sim_share, 'config',
+                'sitl_extnav.parm' if use_extnav else 'sitl_indoor.parm')
+
+        cmd = [
+            os.path.normpath(
+                os.path.join(sim_share, '..', '..', 'lib', 'j10_sim', 'run_sitl.sh')),
+            '--ardupilot-dir', LaunchConfiguration('ardupilot_dir').perform(context),
+            '--param-file', params,
+        ]
+        if use_extnav:
+            cmd.append('--extnav')
+
+        return [ExecuteProcess(cmd=cmd, output='screen', shell=False)]
+
     sitl_process = TimerAction(
         period=LaunchConfiguration('sitl_startup_delay'),
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    os.path.normpath(
-                        os.path.join(
-                            sim_share, '..', '..', 'lib', 'j10_sim', 'run_sitl.sh')),
-                    '--ardupilot-dir', LaunchConfiguration('ardupilot_dir'),
-                    '--param-file', os.path.join(
-                        sim_share, 'config', 'sitl_indoor.parm'),
-                ],
-                output='screen',
-                shell=False,
-            )
-        ],
+        actions=[OpaqueFunction(function=_sitl_process)],
         condition=IfCondition(sitl),
     )
 

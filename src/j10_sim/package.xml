@@ -17,12 +17,15 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>j10_mavlink</exec_depend>
+  <exec_depend>j10_interfaces</exec_depend>
   <exec_depend>mavros</exec_depend>
   <exec_depend>mavros_extras</exec_depend>
   <exec_depend>mavros_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <!-- scripts/latency_probe.py and scripts/link_loss_test.py -->
+  <exec_depend>rclpy</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

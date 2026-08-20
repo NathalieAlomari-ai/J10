@@ -8,34 +8,71 @@
 # --- EKF3 on, GPS off -------------------------------------------------------------------
 AHRS_EKF_TYPE   3
 EK3_ENABLE      1
+# GPS_TYPE was renamed GPS1_TYPE in ArduPilot 4.5. An unknown parameter name is warned
+# about and then ignored, which on a recent tree would leave GPS quietly ACTIVE and the
+# vehicle not GPS-denied at all. Both names are set; confirm with `param show GPS*`.
 GPS_TYPE        0
+GPS1_TYPE       0
 
-# Source set 1: horizontal position/velocity from optical flow, vertical from rangefinder.
+# Source set 1: horizontal position/velocity from optical flow, vertical from baro.
 EK3_SRC1_POSXY  0
 EK3_SRC1_VELXY  5
-EK3_SRC1_POSZ   2
+# Baro, not RangeFinder. Flow is an ANGULAR rate, so converting it to a velocity needs a
+# height and the rangefinder must be healthy either way — but making it the EKF's primary
+# height source as well couples two failure modes and is fragile over a non-flat indoor
+# floor. The rangefinder still feeds flow scaling, and j10_safety still prefers it for AGL.
+EK3_SRC1_POSZ   1
 EK3_SRC1_VELZ   0
 EK3_SRC1_YAW    1
+# Use flow for navigation rather than terrain height only.
+EK3_FLOW_USE    1
 
 # --- Simulated optical flow -------------------------------------------------------------
+# FLOW_TYPE takes effect only after a reboot.
 SIM_FLOW_ENABLE 1
 FLOW_TYPE       10
 
 # --- Simulated rangefinder --------------------------------------------------------------
-RNGFND1_TYPE    100
+# The ANALOG path, which is what ArduPilot's own SITL optical-flow recipe uses. The previous
+# setting mixed the two: RNGFND1_TYPE 100 selects the SITL rangefinder driver, but
+# SIM_SONAR_SCALE is the scaling for the analog device, and RNGFND1_PIN was missing
+# entirely. The result is no range reading, which means no flow scaling, which means the
+# EKF never fuses flow — arming stays blocked with no error that names the cause.
+RNGFND1_TYPE    1
+RNGFND1_PIN     0
+RNGFND1_SCALING 10
 RNGFND1_ORIENT  25
 RNGFND1_MIN_CM  5
-RNGFND1_MAX_CM  800
+RNGFND1_MAX_CM  4000
 SIM_SONAR_SCALE 10
 
 # --- Arming and failsafes for a bench SITL run ------------------------------------------
-# Indoors there is no GPS and no RC transmitter attached to SITL, so the corresponding
-# prearm checks and failsafes would block every test. These relaxations are SITL-only and
-# must NOT be carried into a real airframe parameter set.
-ARMING_CHECK    0
+# No RC transmitter is attached to SITL, so the throttle failsafe would block every test.
+# This relaxation is SITL-only and must NOT be carried into a real airframe parameter set.
 FS_THR_ENABLE   0
-FS_GCS_ENABLE   0
 BRD_SAFETYENABLE 0
+
+# Prearm checks stay ON.
+#
+# They were previously 0, and that is why the EKF blocker was so hard to diagnose:
+# ARMING_CHECK 0 suppresses the PreArm message that names WHICH estimator flag is missing,
+# so the failure surfaces only as a silent refusal several layers up. If arming is refused
+# now, the console says why. Turn this off only to prove a hypothesis, and turn it back on.
+ARMING_CHECK    1
+
+# The GCS failsafe is ENABLED, and that is a requirement rather than a preference: task A
+# specifies "stop commands on stream drop -> FC failsafe takes over" with the KPI
+# "Commands stop <= 1 s after link loss; FC failsafe verified". With FS_GCS_ENABLE 0 there
+# is no failsafe to take over, so that KPI cannot be demonstrated at all.
+#
+# 1 = LAND. Not RTL: there is no GPS indoors, and RTL without a home position is not a
+# recovery, it is a second failure.
+#   VERIFY: the FS_GCS_ENABLE option numbering differs between Copter releases. Confirm
+#   which value means LAND on this build before trusting the failsafe.
+FS_GCS_ENABLE   1
+# Seconds of MAVLink silence before the failsafe triggers. The KPI gives the PC 1 s to stop
+# commanding; this is the flight controller's half of that contract.
+FS_GCS_TIMEOUT  1
 
 # --- Guided mode behaviour ---------------------------------------------------------------
 # The bridge streams setpoints at 30 Hz continuously, so this timeout should never trip.

@@ -34,6 +34,29 @@ mavlink_bridge_node:
     # within 1 s of the command stopping.
     command_timeout_sec: 0.3
 
+    # --- Link loss ---
+    # Task A: "Link-loss safety: stop commands on stream drop -> FC failsafe takes over",
+    # KPI "Commands stop <= 1 s after link loss; FC failsafe verified".
+    #
+    # There are two different failures here and they get different answers:
+    #
+    #   Upstream slow, link healthy   -> keep streaming zeros (command_timeout_sec above).
+    #                                    ArduPilot's guided failsafe must NOT trip; nothing
+    #                                    is wrong with the vehicle.
+    #   PC-side chain gone            -> STOP streaming entirely. safety_filter_node
+    #                                    publishes /j10/cmd_vel_safe on a fixed-rate timer
+    #                                    regardless of its own inputs, so silence for this
+    #                                    long means the filter died, the process was killed,
+    #                                    or the link dropped.
+    #
+    # Requires FS_GCS_ENABLE on the flight controller — see src/j10_sim/config/*.parm.
+    # With it disabled there is no failsafe to hand over to and the KPI cannot be shown.
+    link_loss_stop_enabled: true
+    stream_stop_timeout_sec: 1.0
+    # Latching: once the FC has begun its failsafe response, resuming setpoints underneath
+    # it would fight the landing. Recovery is /j10/vehicle/resume_stream, deliberately.
+    stream_stop_latching: true
+
     # --- Frame convention ---
     # 'flu' passes the ROS body-FLU twist straight through, which is correct for
     # mavros_msgs/PositionTarget with FRAME_BODY_NED: the MAVROS setpoint_raw plugin applies
@@ -54,6 +77,10 @@ mavlink_bridge_node:
     # ArduPilot runs its own guided takeoff controller; a velocity setpoint during the climb
     # overrides it and the vehicle stays on the ground.
     suppress_setpoints_during_takeoff: true
+    # Hard ceiling on that suppression, independent of takeoff_timeout_sec. A climb that
+    # stalls at half altitude used to buy 30 s of silence — ten times GUID_TIMEOUT, and
+    # indistinguishable from the link having died.
+    max_setpoint_suppression_sec: 3.0
 
     require_ekf_healthy_to_arm: true
     # SITL-only escape hatch. Must stay false against a real autopilot.

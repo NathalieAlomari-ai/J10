@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <thread>
 #include <utility>
 
@@ -12,6 +13,14 @@ namespace j10_mavlink
 
 namespace
 {
+/// steady_clock "now" in nanoseconds. steady_clock::duration is not nanoseconds on every
+/// standard library, so the cast is explicit rather than implied by .count().
+int64_t steadyNanos()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 /// Convert a rate in Hz to a timer period, guarding against a zero/negative parameter.
 std::chrono::nanoseconds periodFromRate(double rate_hz, double fallback_hz)
 {
@@ -35,10 +44,24 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
   params_.takeoff_timeout_sec = declare_parameter("takeoff_timeout_sec", 30.0);
   params_.suppress_setpoints_during_takeoff =
     declare_parameter("suppress_setpoints_during_takeoff", true);
+  // Hard ceiling on how long the stream may stay silent for a takeoff, independent of
+  // takeoff_timeout_sec. A climb that stalls at half altitude used to buy 30 s of silence,
+  // which is ten times ArduPilot's GUID_TIMEOUT and indistinguishable, from the flight
+  // controller's side, from the link having died.
+  params_.max_setpoint_suppression_sec =
+    declare_parameter("max_setpoint_suppression_sec", 3.0);
   params_.require_ekf_healthy_to_arm = declare_parameter("require_ekf_healthy_to_arm", true);
   params_.allow_force_arm = declare_parameter("allow_force_arm", false);
   params_.service_timeout_sec = declare_parameter("service_timeout_sec", 5.0);
   params_.state_timeout_sec = declare_parameter("state_timeout_sec", 1.0);
+
+  // --- Link-loss behaviour ---
+  // Task A: "stop commands on stream drop -> FC failsafe takes over", KPI "Commands stop
+  // <= 1 s after link loss". The default below IS that KPI; changing it changes what the
+  // system promises, so it is spelled out rather than buried.
+  params_.link_loss_stop_enabled = declare_parameter("link_loss_stop_enabled", true);
+  params_.stream_stop_timeout_sec = declare_parameter("stream_stop_timeout_sec", 1.0);
+  params_.stream_stop_latching = declare_parameter("stream_stop_latching", true);
 
   const auto convention_name = declare_parameter("body_frame_convention", std::string("flu"));
   params_.body_frame_convention = BodyFrameConvention::kFlu;
@@ -56,6 +79,7 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
   timer_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   sub_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   service_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  takeoff_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   client_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
   // --- Topic and service names ---
@@ -109,16 +133,35 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
       &MavlinkBridgeNode::handleArmDisarm, this, std::placeholders::_1, std::placeholders::_2),
     rmw_qos_profile_services_default, service_group_);
 
+  // Its own group, not service_group_: handleTakeoff blocks for the duration of the climb,
+  // and abort paths (disarm, stop_stream) must stay answerable throughout.
   takeoff_srv_ = create_service<std_srvs::srv::Trigger>(
     "/j10/vehicle/takeoff",
     std::bind(
       &MavlinkBridgeNode::handleTakeoff, this, std::placeholders::_1, std::placeholders::_2),
-    rmw_qos_profile_services_default, service_group_);
+    rmw_qos_profile_services_default, takeoff_group_);
 
   set_guided_srv_ = create_service<std_srvs::srv::Trigger>(
     "/j10/vehicle/set_guided",
     std::bind(
       &MavlinkBridgeNode::handleSetGuided, this, std::placeholders::_1, std::placeholders::_2),
+    rmw_qos_profile_services_default, service_group_);
+
+  // These two do no blocking work, so they share the service group harmlessly -- but note
+  // that stop_stream is the abort path and must stay responsive even while a takeoff is
+  // in flight. See the note on takeoff_group_ below.
+  stop_stream_srv_ = create_service<std_srvs::srv::Trigger>(
+    "/j10/vehicle/stop_stream",
+    std::bind(
+      &MavlinkBridgeNode::handleStopStream, this, std::placeholders::_1,
+      std::placeholders::_2),
+    rmw_qos_profile_services_default, service_group_);
+
+  resume_stream_srv_ = create_service<std_srvs::srv::Trigger>(
+    "/j10/vehicle/resume_stream",
+    std::bind(
+      &MavlinkBridgeNode::handleResumeStream, this, std::placeholders::_1,
+      std::placeholders::_2),
     rmw_qos_profile_services_default, service_group_);
 
   // --- MAVROS clients ---
@@ -149,6 +192,23 @@ MavlinkBridgeNode::MavlinkBridgeNode(const rclcpp::NodeOptions & options)
     get_logger(), "  %s -> %s | services: %s %s %s",
     cmd_vel_topic.c_str(), setpoint_topic.c_str(), set_mode_service.c_str(),
     arming_service.c_str(), takeoff_service.c_str());
+
+  RCLCPP_INFO(
+    get_logger(),
+    "  link loss: %s -- setpoints stop after %.0f ms of silence on %s so the flight "
+    "controller failsafe takes over%s",
+    params_.link_loss_stop_enabled ? "ARMED" : "DISABLED (stream never stops)",
+    params_.stream_stop_timeout_sec * 1e3, cmd_vel_topic.c_str(),
+    params_.stream_stop_latching ? "; latching, resume via /j10/vehicle/resume_stream" : "");
+
+  if (!params_.link_loss_stop_enabled) {
+    RCLCPP_WARN(
+      get_logger(),
+      "link_loss_stop_enabled is FALSE. The bridge will emit zero-velocity setpoints "
+      "forever on loss of input, which suppresses the flight controller's GCS failsafe. "
+      "The task A KPI \"Commands stop <= 1 s after link loss; FC failsafe verified\" "
+      "cannot be demonstrated in this configuration.");
+  }
 
   if (params_.allow_force_arm) {
     RCLCPP_WARN(
@@ -201,38 +261,113 @@ void MavlinkBridgeNode::onVehicleState(const j10_interfaces::msg::VehicleState::
 // The setpoint stream
 // ---------------------------------------------------------------------------------------
 
+void MavlinkBridgeNode::stopStream(const std::string & reason)
+{
+  // Idempotent: exchange returns the previous value, so only the first caller logs.
+  if (stream_stopped_.exchange(true)) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(stop_mutex_);
+    stream_stop_reason_ = reason;
+  }
+  RCLCPP_ERROR(
+    get_logger(),
+    "SETPOINT STREAM STOPPED: %s. The flight controller is now on its own failsafe "
+    "(GUID_TIMEOUT, then FS_GCS_ENABLE). Resume with /j10/vehicle/resume_stream once the "
+    "cause is understood — do NOT resume into an in-progress failsafe landing.",
+    reason.c_str());
+}
+
 void MavlinkBridgeNode::onSetpointTimer()
 {
+  // A deliberate stop outranks everything below. The flight controller is running its own
+  // failsafe and publishing underneath it would fight the landing.
+  if (stream_stopped_.load()) {
+    return;
+  }
+
   // ArduPilot runs its own guided takeoff controller. Streaming a velocity setpoint during
   // that window overrides the climb and the vehicle sits on the ground, so hold the stream
-  // until takeoff reports complete.
+  // until takeoff reports complete -- but never for longer than
+  // max_setpoint_suppression_sec, whatever the climb is doing. Beyond that the silence is
+  // no longer a deliberate handover to the takeoff controller, it is an outage.
   if (takeoff_in_progress_.load() && params_.suppress_setpoints_during_takeoff) {
-    return;
+    const int64_t started = takeoff_started_ns_.load();
+    const double suppressed =
+      (started == 0) ? 0.0 : static_cast<double>(steadyNanos() - started) * 1e-9;
+    if (suppressed <= params_.max_setpoint_suppression_sec) {
+      return;
+    }
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "takeoff has held the setpoint stream for %.1f s (limit %.1f s) — resuming the "
+      "stream so the guided failsafe does not trip on a stalled climb",
+      suppressed, params_.max_setpoint_suppression_sec);
   }
 
   geometry_msgs::msg::Twist command;
   bool stale = true;
+  bool have_cmd = false;
+  double age = 0.0;
+  bool log_stale = false;
+  bool log_live = false;
 
   {
     std::lock_guard<std::mutex> lock(cmd_mutex_);
+    have_cmd = cmd_ever_received_;
     if (cmd_ever_received_) {
-      const double age = (now() - last_cmd_time_).seconds();
+      age = (now() - last_cmd_time_).seconds();
       stale = age > params_.command_timeout_sec;
       if (!stale) {
         command = last_cmd_;
       }
     }
 
-    // Log only on the edges, so a disarmed vehicle sitting idle does not spam the console.
-    if (stale && !holding_zero_) {
-      RCLCPP_WARN(
-        get_logger(),
-        "/j10/cmd_vel_safe stale (> %.0f ms) — holding zero velocity",
-        params_.command_timeout_sec * 1e3);
-    } else if (!stale && holding_zero_) {
-      RCLCPP_INFO(get_logger(), "/j10/cmd_vel_safe live — following commands");
-    }
+    // Decide on the edges here, but log outside the lock -- an rclcpp logging call can
+    // block on its sinks, and holding a control-path mutex across that is asking for a
+    // late setpoint.
+    log_stale = stale && !holding_zero_;
+    log_live = !stale && holding_zero_;
     holding_zero_ = stale;
+  }
+
+  if (log_stale) {
+    RCLCPP_WARN(
+      get_logger(),
+      "/j10/cmd_vel_safe stale (> %.0f ms) — holding zero velocity",
+      params_.command_timeout_sec * 1e3);
+  } else if (log_live) {
+    RCLCPP_INFO(get_logger(), "/j10/cmd_vel_safe live — following commands");
+  }
+
+  // --- Link loss ---------------------------------------------------------------------
+  //
+  // safety_filter_node publishes /j10/cmd_vel_safe on a fixed-rate timer regardless of its
+  // own inputs, so silence on that topic does not mean "the model is slow" -- it means the
+  // filter is gone, the process died, or the link dropped. That is the case task A's KPI
+  // is about, and the required response is to stop commanding so the flight controller's
+  // failsafe takes the vehicle.
+  //
+  // `have_cmd` guards the pre-flight case: before the first command has ever arrived there
+  // is nothing to have lost, and stopping then would also block arming, which requires
+  // setpoints_published_ > 0.
+  if (params_.link_loss_stop_enabled && have_cmd &&
+    age > params_.stream_stop_timeout_sec)
+  {
+    if (params_.stream_stop_latching) {
+      stopStream(
+        "/j10/cmd_vel_safe silent for " + std::to_string(age) + " s (limit " +
+        std::to_string(params_.stream_stop_timeout_sec) + " s)");
+      return;
+    }
+    // Non-latching: stay silent while the input is missing, resume on its own when the
+    // input returns. Provided for bench work; the shipped default is latching.
+    RCLCPP_ERROR_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "/j10/cmd_vel_safe silent for %.2f s — setpoints suppressed, flight controller "
+      "failsafe active", age);
+    return;
   }
 
   // `command` is default-constructed (all zeros) when stale — decay to hover, never repeat.
@@ -385,6 +520,73 @@ void MavlinkBridgeNode::handleSetGuided(
   RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
 
+void MavlinkBridgeNode::handleStopStream(
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+{
+  // The deliberate-stop entry point. Upstream calls this when it has decided the vehicle
+  // must not keep taking PC-side commands -- video lost, E-stop, mission abort -- rather
+  // than simply going quiet and waiting for the timeout to notice.
+  const bool already = stream_stopped_.load();
+  stopStream("requested via /j10/vehicle/stop_stream");
+
+  response->success = true;
+  response->message = already ?
+    "setpoint stream was already stopped" :
+    "setpoint stream stopped; flight controller failsafe now owns the vehicle";
+}
+
+void MavlinkBridgeNode::handleResumeStream(
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+{
+  if (!stream_stopped_.load()) {
+    response->success = true;
+    response->message = "setpoint stream is already running";
+    return;
+  }
+
+  bool fresh = false;
+  const auto state = vehicleState(fresh);
+
+  // Refusing here is the point. If the vehicle is armed and the flight controller has moved
+  // to a failsafe mode, resuming the stream would drop velocity setpoints underneath an
+  // in-progress landing. Re-entering GUIDED first is an explicit decision to take control
+  // back, and it is the operator's to make, not this service's.
+  if (fresh && state.armed && state.mode != params_.guided_mode) {
+    response->success = false;
+    response->message =
+      "refusing to resume: vehicle is armed in " + state.mode + ", not " +
+      params_.guided_mode + ". The flight controller is running its failsafe. Call "
+      "/j10/vehicle/set_guided first if you intend to take control back.";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  // Clear the command history along with the latch. Without this the age of the last
+  // command is still past stream_stop_timeout_sec and the next timer tick would stop the
+  // stream again immediately; resuming must mean "start from zeros and wait for a fresh
+  // command", not "re-evaluate the stale one".
+  {
+    std::lock_guard<std::mutex> lock(cmd_mutex_);
+    last_cmd_ = geometry_msgs::msg::Twist();
+    cmd_ever_received_ = false;
+    holding_zero_ = true;
+  }
+  {
+    std::lock_guard<std::mutex> lock(stop_mutex_);
+    stream_stop_reason_.clear();
+  }
+  stream_stopped_.store(false);
+
+  response->success = true;
+  response->message = "setpoint stream resumed at zero velocity";
+  RCLCPP_WARN(
+    get_logger(),
+    "setpoint stream RESUMED by operator request — publishing zeros until a fresh "
+    "/j10/cmd_vel_safe arrives");
+}
+
 void MavlinkBridgeNode::handleArmDisarm(
   const std::shared_ptr<j10_interfaces::srv::ArmDisarm::Request> request,
   std::shared_ptr<j10_interfaces::srv::ArmDisarm::Response> response)
@@ -528,6 +730,7 @@ void MavlinkBridgeNode::handleTakeoff(
   req->longitude = 0.0f;
   req->altitude = static_cast<float>(params_.takeoff_altitude_m);
 
+  takeoff_started_ns_.store(steadyNanos());
   takeoff_in_progress_.store(true);
 
   std::string error;

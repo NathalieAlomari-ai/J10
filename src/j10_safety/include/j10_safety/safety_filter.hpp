@@ -49,6 +49,9 @@ public:
   bool estopLatched() const {return estop_latched_;}
 
 private:
+  /// True when the flight controller is still in a mode that acts on offboard setpoints.
+  bool offboardAccepted(const VehicleSnapshot & v) const;
+
   Limits limits_{};
   geometry_msgs::msg::Twist last_commanded_{};
   bool estop_latched_{false};

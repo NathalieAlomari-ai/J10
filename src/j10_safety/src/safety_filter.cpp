@@ -24,6 +24,20 @@ bool changed(double before, double after)
 }
 }  // namespace
 
+namespace
+{
+/// True when the flight controller is still acting on offboard setpoints.
+bool offboardAcceptedImpl(const VehicleSnapshot & v, const std::string & guided_mode)
+{
+  if (!v.guided) {
+    return false;
+  }
+  // An empty configured mode means "trust the boolean only" -- useful for a flight stack
+  // whose mode string differs from ArduPilot's.
+  return guided_mode.empty() || v.mode.empty() || v.mode == guided_mode;
+}
+}  // namespace
+
 SafetyFilter::SafetyFilter(const Limits & limits)
 : limits_(limits)
 {
@@ -33,6 +47,11 @@ void SafetyFilter::reset()
 {
   estop_latched_ = false;
   zero(last_commanded_);
+}
+
+bool SafetyFilter::offboardAccepted(const VehicleSnapshot & v) const
+{
+  return offboardAcceptedImpl(v, limits_.guided_mode);
 }
 
 FilterOutput SafetyFilter::step(const FilterInputs & inputs, double dt)
@@ -73,7 +92,15 @@ FilterOutput SafetyFilter::step(const FilterInputs & inputs, double dt)
   const bool video_fresh = video_ok &&
     (!limits_.video_loss_stops_autonomy || inputs.video_age_sec <= limits_.video_timeout_sec);
 
-  if (inputs.deadman_held) {
+  // A deadman that has not been heard from is not a held deadman -- it is a dead
+  // publisher. Without this, a teleop node that dies mid-flight with the button down
+  // leaves deadman_held true forever: the filter enters the manual branch, finds manual
+  // input stale, and brakes permanently with no operator action able to clear it.
+  const bool deadman_fresh = inputs.deadman_held && inputs.deadman_valid &&
+    inputs.deadman_age_sec <= limits_.command_timeout_sec;
+  const bool deadman_stale_but_held = inputs.deadman_held && !deadman_fresh;
+
+  if (deadman_fresh) {
     // The operator has asserted control, so manual owns the vehicle from here. If their
     // input has gone stale we brake -- we do NOT fall back to autonomy. The human
     // believes they are flying it, and silently handing the vehicle back to the model
@@ -87,6 +114,19 @@ FilterOutput SafetyFilter::step(const FilterInputs & inputs, double dt)
       note(out.active_limits, "MANUAL_TIMEOUT");
       escalate(state, SafetyState::kBraking);
     }
+  } else if (deadman_stale_but_held) {
+    // The deadman reads "held" but the publisher has gone quiet, so we do not actually
+    // know whether a human is on the sticks. Braking is the only answer that is not a
+    // guess -- falling through to autonomy here would hand the vehicle to the model at
+    // exactly the moment a pilot might believe they are flying it.
+    //
+    // This does not latch: safety_filter_node clears its cached deadman state after the
+    // same timeout, so the next cycle sees deadman_held false and the ladder proceeds
+    // normally. The braking cycle is what makes the transition visible instead of silent.
+    out.source = ArbitrationSource::kOverride;
+    zero(out.requested);
+    note(out.active_limits, "DEADMAN_TIMEOUT");
+    escalate(state, SafetyState::kBraking);
   } else if (inputs.autonomy_enabled && autonomous_fresh && video_fresh) {
     out.source = ArbitrationSource::kAutonomous;
     out.requested = inputs.autonomous;
@@ -128,6 +168,14 @@ FilterOutput SafetyFilter::step(const FilterInputs & inputs, double dt)
     zero(cmd);
   } else if (!v.ekf_healthy) {
     note(out.active_limits, "EKF_UNHEALTHY");
+    escalate(state, SafetyState::kBraking);
+    zero(cmd);
+  } else if (limits_.require_guided && v.armed && !offboardAccepted(v)) {
+    // The flight controller has left the mode that acts on our setpoints -- a failsafe
+    // fired, or a pilot took the vehicle back. Continuing to compute commands as though it
+    // had not is a fiction, and the component with veto authority should not be the last
+    // to notice it no longer has any.
+    note(out.active_limits, "NOT_GUIDED");
     escalate(state, SafetyState::kBraking);
     zero(cmd);
   }
@@ -195,9 +243,10 @@ FilterOutput SafetyFilter::step(const FilterInputs & inputs, double dt)
     // the ground. Every other descent respects it.
     if (!forced_landing) {
       const double before = cmd.linear.z;
-      cmd.linear.z = limitAgainstBounds(
+      cmd.linear.z = limitAgainstBoundsBraking(
         altitude, limits_.min_altitude_m, limits_.max_altitude_m,
-        limits_.altitude_margin_m, cmd.linear.z);
+        limits_.altitude_margin_m, cmd.linear.z, v.vz,
+        limits_.brake_accel_mps2, limits_.control_latency_sec);
       if (changed(before, cmd.linear.z)) {
         note(out.active_limits, before < 0.0 ? "ALT_FLOOR" : "ALT_CEILING");
         escalate(
@@ -214,12 +263,17 @@ FilterOutput SafetyFilter::step(const FilterInputs & inputs, double dt)
       double vy_enu = 0.0;
       bodyToEnu(cmd.linear.x, cmd.linear.y, v.yaw, vx_enu, vy_enu);
 
-      const double vx_limited = limitAgainstBounds(
+      // The fence is ENU and so is the measured velocity, so the barrier reads v.vx/v.vy
+      // directly. This is the whole point of the change: the vehicle's momentum, not just
+      // what was asked for, decides how much outward command is still safe.
+      const double vx_limited = limitAgainstBoundsBraking(
         v.x, limits_.geofence_min_x, limits_.geofence_max_x,
-        limits_.geofence_margin_m, vx_enu);
-      const double vy_limited = limitAgainstBounds(
+        limits_.geofence_margin_m, vx_enu, v.vx,
+        limits_.brake_accel_mps2, limits_.control_latency_sec);
+      const double vy_limited = limitAgainstBoundsBraking(
         v.y, limits_.geofence_min_y, limits_.geofence_max_y,
-        limits_.geofence_margin_m, vy_enu);
+        limits_.geofence_margin_m, vy_enu, v.vy,
+        limits_.brake_accel_mps2, limits_.control_latency_sec);
 
       if (changed(vx_enu, vx_limited)) {
         note(out.active_limits, "GEOFENCE_X");
@@ -240,11 +294,11 @@ FilterOutput SafetyFilter::step(const FilterInputs & inputs, double dt)
   // 9. Acceleration limiting, last so that nothing above can be exceeded on the way to
   // the target, and asymmetric so a brake is never rate-limited into a slow roll.
   // ---------------------------------------------------------------------------------
-  bool accel_bound = false;
-  accel_bound |= rateLimit(
-    last_commanded_.linear.x, cmd.linear.x, limits_.max_accel_mps2, limits_.max_decel_mps2, dt);
-  accel_bound |= rateLimit(
-    last_commanded_.linear.y, cmd.linear.y, limits_.max_accel_mps2, limits_.max_decel_mps2, dt);
+  // Horizontal as a 2-vector: limiting x and y independently would let a 45-degree command
+  // accelerate at sqrt(2) times the configured limit.
+  bool accel_bound = rateLimitHorizontal(
+    last_commanded_.linear.x, last_commanded_.linear.y, cmd.linear.x, cmd.linear.y,
+    limits_.max_accel_mps2, limits_.max_decel_mps2, dt);
   accel_bound |= rateLimit(
     last_commanded_.linear.z, cmd.linear.z, limits_.max_accel_mps2, limits_.max_decel_mps2, dt);
   const bool yaw_bound = rateLimit(

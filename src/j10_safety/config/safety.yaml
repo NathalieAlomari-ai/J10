@@ -38,6 +38,23 @@ safety_filter_node:
     max_altitude_m: 1.5
     altitude_margin_m: 0.3
 
+    # --- Envelope barrier ---
+    # How much deceleration the FLIGHT CONTROLLER can achieve, m/s^2 — not what this filter
+    # rate-limits commands to. The filter can only stop asking for outward motion; the
+    # vehicle is actually stopped by the guided velocity controller, so this is the number
+    # that decides how much room a stop needs. Deliberately conservative.
+    brake_accel_mps2: 1.0
+    # Round-trip control latency. The vehicle keeps moving for about this long before a new
+    # command takes effect, so this much travel is reserved out of the distance to every
+    # boundary. Matches the 300 ms end-to-end budget in docs/ARCHITECTURE.md section 6.
+    control_latency_sec: 0.3
+    #
+    # The node checks at startup that every margin below is at least
+    #   speed^2 / (2 * brake_accel) + speed * control_latency
+    # and REFUSES TO START otherwise. At 0.3 m/s that is 0.135 m, so the margins here have
+    # room. Raise max_horizontal_mps without raising geofence_margin_m and the node will
+    # say so instead of flying an envelope it cannot keep.
+
     # --- Virtual geofence: axis-aligned box in the ENU local frame, metres from origin ---
     # 2x2 m box, matching the Phase 7 conservative envelope.
     geofence_enabled: true
@@ -69,3 +86,11 @@ safety_filter_node:
     # Set false until Phase 3 lands j10_video: with no StreamStatus publisher on the graph
     # this would otherwise hold the vehicle permanently.
     video_loss_stops_autonomy: false
+
+    # --- Offboard authority ---
+    # An armed vehicle that has left GUIDED is no longer acting on our setpoints, so the
+    # filter brakes and reports NOT_GUIDED rather than continuing to compute commands
+    # nobody is executing. Set require_guided false, or change guided_mode, for a flight
+    # stack whose mode string differs (PX4 calls it OFFBOARD).
+    require_guided: true
+    guided_mode: "GUIDED"

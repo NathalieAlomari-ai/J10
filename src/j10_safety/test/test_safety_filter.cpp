@@ -50,6 +50,10 @@ VehicleSnapshot healthyVehicle()
   v.rangefinder_range = 1.0;
   v.ekf_healthy = true;
   v.armed = true;
+  // An armed vehicle that is NOT in a mode which acts on offboard setpoints is a fault
+  // (see the NOT_GUIDED tests), so "healthy" has to include actually being commandable.
+  v.guided = true;
+  v.mode = "GUIDED";
   v.battery_fraction = 0.8;
   return v;
 }
@@ -793,4 +797,284 @@ TEST(Invariant, NoInputEverExceedsTheConfiguredEnvelope)
       }
     }
   }
+}
+
+// =======================================================================================
+// Envelope barrier: the boundary check reads MEASURED velocity, not just the command.
+//
+// The margin rule alone is not a containment guarantee. It scales the *commanded* velocity
+// to zero at the boundary, which describes a vehicle that is still moving outward. These
+// tests pin the braking-distance form: the command is capped so the room that is left is
+// enough to stop in, after subtracting the travel that happens during the loop delay.
+// =======================================================================================
+
+TEST(Barrier, NeverAllowsMoreThanTheMarginRule)
+{
+  // A regression guard, not a behaviour test: whatever the barrier does, it may only ever
+  // tighten. If this fails, an envelope tuned against the old rule has silently loosened.
+  for (double position = -1.0; position <= 1.0; position += 0.01) {
+    for (double measured = -0.6; measured <= 0.6; measured += 0.1) {
+      const double margin_rule =
+        j10_safety::limitAgainstBounds(position, -1.0, 1.0, 0.4, 0.3);
+      const double barrier = j10_safety::limitAgainstBoundsBraking(
+        position, -1.0, 1.0, 0.4, 0.3, measured, 1.0, 0.3);
+      EXPECT_LE(std::abs(barrier), std::abs(margin_rule) + 1e-12)
+        << "position " << position << " measured " << measured;
+    }
+  }
+}
+
+TEST(Barrier, ReservesTheDistanceTravelledDuringTheLoopDelay)
+{
+  // 0.08 m from the fence while moving outward at 0.3 m/s. The vehicle covers 0.09 m
+  // before any new command can take effect, so there is no room left at all.
+  const double barrier = j10_safety::limitAgainstBoundsBraking(
+    0.92, -1.0, 1.0, 0.4, /*commanded=*/0.3, /*measured=*/0.3,
+    /*brake_accel=*/1.0, /*latency=*/0.3);
+  EXPECT_DOUBLE_EQ(barrier, 0.0);
+
+  // The margin rule alone would still have allowed outward motion here.
+  EXPECT_GT(j10_safety::limitAgainstBounds(0.92, -1.0, 1.0, 0.4, 0.3), 0.0);
+}
+
+TEST(Barrier, RefusesACommandItCouldNotStopFrom)
+{
+  // This is the case the change exists for: a faster envelope. 0.3 m from the fence, 1.5
+  // m/s commanded and measured, 1.0 m/s^2 of braking authority.
+  const double margin_rule = j10_safety::limitAgainstBounds(0.7, -1.0, 1.0, 0.4, 1.5);
+  const double stopping_distance = (margin_rule * margin_rule) / (2.0 * 1.0);
+  EXPECT_GT(stopping_distance, 0.3)
+    << "the margin rule allows a command that needs more room than exists";
+
+  const double barrier = j10_safety::limitAgainstBoundsBraking(
+    0.7, -1.0, 1.0, 0.4, 1.5, 1.5, 1.0, 0.3);
+  EXPECT_DOUBLE_EQ(barrier, 0.0);
+}
+
+TEST(Barrier, InwardMotionIsNeverPenalised)
+{
+  // Hard against the fence, moving away from it. Nothing should be taken off this.
+  EXPECT_DOUBLE_EQ(
+    j10_safety::limitAgainstBoundsBraking(0.95, -1.0, 1.0, 0.4, -0.3, -0.3, 1.0, 0.3),
+    -0.3);
+}
+
+TEST(Barrier, GeofenceUsesMeasuredVelocityFromTheSnapshot)
+{
+  Limits l = permissiveAccel();
+  l.geofence_min_x = -1.0;
+  l.geofence_max_x = 1.0;
+  l.geofence_min_y = -1.0;
+  l.geofence_max_y = 1.0;
+  l.geofence_margin_m = 0.4;
+  l.brake_accel_mps2 = 1.0;
+  l.control_latency_sec = 0.3;
+  l.max_horizontal_mps = 1.0;
+
+  SafetyFilter filter(l);
+  auto in = autonomousInputs(0.3);
+  in.vehicle.x = 0.92;          // 0.08 m from the +x fence
+  in.vehicle.vx = 0.3;          // and still moving at it
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_NEAR(out.commanded.linear.x, 0.0, 1e-9);
+  EXPECT_TRUE(has(out.active_limits, "GEOFENCE_X"));
+}
+
+TEST(Barrier, StationaryVehicleNearTheFenceKeepsTheMarginBehaviour)
+{
+  // With no measured motion there is nothing to reserve, so the barrier must not be
+  // stricter than the margin rule -- otherwise the envelope shrinks for no reason.
+  Limits l = permissiveAccel();
+  l.geofence_margin_m = 0.4;
+  l.brake_accel_mps2 = 1.0;
+  l.control_latency_sec = 0.3;
+  l.max_horizontal_mps = 1.0;
+  l.geofence_min_x = -2.0;
+  l.geofence_max_x = 2.0;
+  l.geofence_min_y = -2.0;
+  l.geofence_max_y = 2.0;
+
+  SafetyFilter filter(l);
+  auto in = autonomousInputs(0.3);
+  in.vehicle.x = 1.8;           // 0.2 m in, half the margin
+  in.vehicle.vx = 0.0;
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_NEAR(out.commanded.linear.x, 0.3 * (0.2 / 0.4), 1e-9);
+}
+
+TEST(Barrier, RequiredMarginMatchesTheShippedEnvelope)
+{
+  // 0.3 m/s, 1.0 m/s^2, 300 ms: 0.045 m to brake plus 0.09 m of latency travel.
+  EXPECT_NEAR(j10_safety::requiredMargin(0.3, 1.0, 0.3), 0.135, 1e-9);
+  // safety.yaml ships 0.4 m, so the shipped envelope is enforceable...
+  EXPECT_LT(j10_safety::requiredMargin(0.3, 1.0, 0.3), 0.4);
+  // ...and would stop being enforceable if the speed limit were raised to 1.5 m/s, which
+  // is exactly what the node's startup check refuses to let happen silently.
+  EXPECT_GT(j10_safety::requiredMargin(1.5, 1.0, 0.3), 0.4);
+}
+
+// =======================================================================================
+// Offboard authority: the filter must notice when the FC stops acting on its commands.
+// =======================================================================================
+
+TEST(Guided, ArmedButNotGuidedBrakes)
+{
+  SafetyFilter filter(permissiveAccel());
+  auto in = autonomousInputs(0.3);
+  in.vehicle.guided = false;
+  in.vehicle.mode = "LAND";     // a failsafe fired, or a pilot took the vehicle back
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_TRUE(has(out.active_limits, "NOT_GUIDED"));
+  EXPECT_EQ(out.state, SafetyState::kBraking);
+  EXPECT_DOUBLE_EQ(out.commanded.linear.x, 0.0);
+}
+
+TEST(Guided, DisarmedVehicleIsNotAFault)
+{
+  // On the ground, not armed, in whatever mode the FC booted into. That is normal.
+  SafetyFilter filter(permissiveAccel());
+  auto in = autonomousInputs(0.3);
+  in.vehicle.armed = false;
+  in.vehicle.guided = false;
+  in.vehicle.mode = "STABILIZE";
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_FALSE(has(out.active_limits, "NOT_GUIDED"));
+}
+
+TEST(Guided, ModeStringMismatchIsEnoughOnItsOwn)
+{
+  // guided true but the mode is not the configured one: MAVROS reports guided for more
+  // than one ArduPilot mode, so the name is checked as well as the flag.
+  SafetyFilter filter(permissiveAccel());
+  auto in = autonomousInputs(0.3);
+  in.vehicle.guided = true;
+  in.vehicle.mode = "AUTO";
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_TRUE(has(out.active_limits, "NOT_GUIDED"));
+}
+
+TEST(Guided, CanBeDisabledForAFlightStackWithADifferentModeName)
+{
+  Limits l = permissiveAccel();
+  l.require_guided = false;
+
+  SafetyFilter filter(l);
+  auto in = autonomousInputs(0.3);
+  in.vehicle.guided = false;
+  in.vehicle.mode = "OFFBOARD";
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_FALSE(has(out.active_limits, "NOT_GUIDED"));
+  EXPECT_DOUBLE_EQ(out.commanded.linear.x, 0.3);
+}
+
+// =======================================================================================
+// Deadman watchdog: a held button from a dead publisher is not a held button.
+// =======================================================================================
+
+TEST(Deadman, StaleHeldDeadmanBrakes)
+{
+  SafetyFilter filter(permissiveAccel());
+  auto in = autonomousInputs(0.3);
+  in.manual.linear.x = 0.2;
+  in.manual_valid = true;
+  in.manual_age_sec = 0.01;
+  in.deadman_held = true;
+  in.deadman_valid = true;
+  in.deadman_age_sec = 5.0;     // j10_teleop died with the button down
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_TRUE(has(out.active_limits, "DEADMAN_TIMEOUT"));
+  EXPECT_EQ(out.state, SafetyState::kBraking);
+  EXPECT_DOUBLE_EQ(out.commanded.linear.x, 0.0);
+}
+
+TEST(Deadman, StaleHeldDeadmanDoesNotHandTheVehicleBackToTheModel)
+{
+  // The failure this guards against: a pilot's node dies, and the model quietly takes over
+  // while they still believe they are flying.
+  SafetyFilter filter(permissiveAccel());
+  auto in = autonomousInputs(0.3);
+  in.manual_valid = true;
+  in.manual_age_sec = 0.01;
+  in.deadman_held = true;
+  in.deadman_valid = true;
+  in.deadman_age_sec = 5.0;
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_NE(out.source, ArbitrationSource::kAutonomous);
+}
+
+TEST(Deadman, FreshHeldDeadmanStillWinsArbitration)
+{
+  SafetyFilter filter(permissiveAccel());
+  auto in = autonomousInputs(0.3);
+  in.manual.linear.x = -0.2;
+  in.manual_valid = true;
+  in.manual_age_sec = 0.01;
+  in.deadman_held = true;
+  in.deadman_valid = true;
+  in.deadman_age_sec = 0.01;
+
+  const auto out = filter.step(in, kDt);
+  EXPECT_EQ(out.source, ArbitrationSource::kManual);
+  EXPECT_DOUBLE_EQ(out.commanded.linear.x, -0.2);
+}
+
+// =======================================================================================
+// Acceleration limiting: bad timing, and diagonals.
+// =======================================================================================
+
+TEST(Accel, NonPositiveDtHoldsInsteadOfPassingTheCommandThrough)
+{
+  // dt <= 0 means the clock jumped or the executor stalled. Previously this assigned the
+  // target outright and reported that nothing bound -- the limiter disabled itself at
+  // exactly the moment the timing could not be trusted.
+  double current = 0.0;
+  EXPECT_TRUE(j10_safety::rateLimit(current, 5.0, 0.5, 1.5, 0.0));
+  EXPECT_DOUBLE_EQ(current, 0.0);
+
+  current = 0.0;
+  EXPECT_TRUE(j10_safety::rateLimit(current, 5.0, 0.5, 1.5, -1.0));
+  EXPECT_DOUBLE_EQ(current, 0.0);
+}
+
+TEST(Accel, DiagonalRespectsTheVectorLimitNotThePerAxisOne)
+{
+  Limits l;
+  l.max_accel_mps2 = 0.5;
+  l.max_decel_mps2 = 1.5;
+  l.max_horizontal_mps = 1.0;
+
+  SafetyFilter filter(l);
+  auto in = autonomousInputs(0.3, 0.3);   // 45 degrees
+
+  const auto out = filter.step(in, kDt);
+  const double magnitude = std::hypot(out.commanded.linear.x, out.commanded.linear.y);
+  // Per-axis limiting would give 0.5*dt on each axis, so sqrt(2) * 0.5 * dt overall.
+  EXPECT_NEAR(magnitude, 0.5 * kDt, 1e-9);
+  EXPECT_TRUE(has(out.active_limits, "ACCEL"));
+}
+
+TEST(Accel, DiagonalStillReachesTheTargetEventually)
+{
+  Limits l;
+  l.max_accel_mps2 = 0.5;
+  l.max_decel_mps2 = 1.5;
+  l.max_horizontal_mps = 1.0;
+
+  SafetyFilter filter(l);
+  auto in = autonomousInputs(0.3, 0.3);
+
+  j10_safety::FilterOutput out;
+  for (int i = 0; i < 200; ++i) {
+    out = filter.step(in, kDt);
+  }
+  EXPECT_NEAR(out.commanded.linear.x, 0.3, 1e-6);
+  EXPECT_NEAR(out.commanded.linear.y, 0.3, 1e-6);
 }

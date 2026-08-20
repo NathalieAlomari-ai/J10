@@ -48,6 +48,8 @@ private:
     std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
   Limits loadLimits();
+  /// Refuse to start on an envelope that cannot be enforced at the configured speed.
+  void assertEnvelopeIsEnforceable(const Limits & l) const;
 
   SafetyFilter filter_;
 
@@ -74,6 +76,8 @@ private:
   bool manual_received_{false};
 
   bool deadman_held_{false};
+  rclcpp::Time deadman_time_;
+  bool deadman_received_{false};
   bool estop_engaged_{false};
   bool autonomy_enabled_{false};
 

@@ -108,6 +108,47 @@ ros2 launch j10_mavlink mavlink.launch.py
 
 ---
 
+## GPS-denied EKF: two paths
+
+Two ways to get `ekf_healthy: true` indoors. Use whichever unblocks you fastest, then
+switch to the other before hardware.
+
+**`--extnav` — simulated external nav (fast path).** ArduPilot SITL can synthesise an
+external-nav MAVLink stream from its own ground truth, so `run_sitl.sh --extnav` gets a
+working EKF with no extra ROS node and no MAVROS vision plugin:
+
+```bash
+ros2 run j10_sim run_sitl.sh --extnav --console
+# or: ros2 launch j10_sim sitl.launch.py extnav:=true
+```
+
+This loads `config/sitl_extnav.parm` and attaches ArduPilot's simulated device on
+SERIAL5. If the EKF never reports a position on this path, the two values most likely to
+have drifted between ArduPilot releases are `VISO_TYPE` and `SIM_VICON_TMASK` — both are
+flagged `VERIFY` in the `.parm` file's comments; read them from the running binary with
+`param show VISO_TYPE` / `param show SIM_VICON*` rather than trusting the shipped numbers.
+
+**Optical flow (`--extnav` omitted, the default).** Loads `config/sitl_indoor.parm`, and is
+the hardware-faithful path toward the real MTF-01. `ARMING_CHECK` is now `1` by default —
+it was `0`, which suppressed the exact PreArm message that names which estimator flag is
+missing. If arming is refused, read that message before changing any parameter:
+
+```bash
+# in the MAVProxy console (run_sitl.sh --console)
+arm throttle
+```
+
+then check the estimator bits directly:
+
+```bash
+ros2 topic echo /mavros/estimator_status --once
+ros2 topic echo /mavros/mavros/rangefinder --once
+```
+
+`vehicle_state_node` now logs exactly which flags are missing (`attitude`,
+`velocity_horiz`, `pos_horiz_rel`, `pos_vert_abs`, `!accel_error`) whenever
+`ekf_healthy` is false, instead of only the aggregated boolean.
+
 ## The Phase 1 test
 
 ### Step 1 — confirm the link
@@ -120,8 +161,9 @@ Look for `connected: true`, a non-empty `mode`, and `staleness_sec` well under `
 `connected` is false, MAVROS is not talking to SITL — check that `fcu_url` matches the
 `--out` endpoint (`udp:127.0.0.1:14551` by default).
 
-`ekf_healthy` needs a few seconds after SITL starts while EKF3 settles on optical flow and
-the rangefinder. If it never goes true, check `EK3_SRC1_*` against `config/sitl_indoor.parm`.
+`ekf_healthy` needs a few seconds after SITL starts while EKF3 settles. If it never goes
+true, the node's own log now names which flag is missing — see "GPS-denied EKF" above for
+where to look next on each path.
 
 Confirm the setpoint stream is already running, disarmed, at 30 Hz:
 
@@ -145,8 +187,9 @@ takeoff controller, and a zero-velocity setpoint would override it and leave the
 the ground.
 
 If arming is refused, the message says why. `EKF is not reporting a usable estimate` means
-wait a few more seconds. In SITL only, you can set `allow_force_arm: true` in
-`j10_mavlink/config/mavlink.yaml` and pass `force: true`.
+wait a few more seconds — or check `ros2 topic echo /mavros/estimator_status --once`,
+since `vehicle_state_node` logs the specific missing flag. In SITL only, you can set
+`allow_force_arm: true` in `j10_mavlink/config/mavlink.yaml` and pass `force: true`.
 
 ### Step 3 — fly it by hand
 
@@ -183,6 +226,51 @@ ros2 service call /j10/vehicle/arm j10_interfaces/srv/ArmDisarm "{arm: false}"
 ```
 
 ---
+
+## Link loss: proving the KPI, not assuming it
+
+Task A: *"Link-loss safety: stop commands on stream drop -> FC failsafe takes over"*, KPI
+*"Commands stop <= 1 s after link loss; FC failsafe verified"*. `mavlink_bridge_node` now
+has two different responses depending on WHAT went silent, documented in the class comment
+in `mavlink_bridge_node.hpp` — the short version: the model being slow keeps the stream
+alive with zeros (ArduPilot's guided failsafe must not trip on that), but
+`/j10/cmd_vel_safe` itself going silent for `stream_stop_timeout_sec` means the PC-side
+chain is gone, and the bridge stops publishing entirely so the flight controller's own
+`FS_GCS_ENABLE` failsafe takes the vehicle. The stop latches; resume explicitly via
+`/j10/vehicle/resume_stream` once the cause is understood.
+
+This requires `FS_GCS_ENABLE 1` on the flight controller, which both shipped `.parm` files
+now set (previously `0`, which made the KPI undemonstrable — there was no failsafe to hand
+over to). Prove it end to end, without arming, with:
+
+```bash
+ros2 run j10_sim link_loss_test.py --failsafe-mode LAND
+```
+
+It streams `/j10/cmd_vel_safe`, stops, and reports both halves of the KPI: how long the
+bridge kept publishing after the cut, and whether `/j10/vehicle/state.mode` subsequently
+changed. Armed and in the air, watch it directly:
+
+```bash
+ros2 service call /j10/vehicle/stop_stream std_srvs/srv/Trigger "{}"
+ros2 topic echo /j10/vehicle/state   # mode should move toward LAND within FS_GCS_TIMEOUT
+ros2 service call /j10/vehicle/resume_stream std_srvs/srv/Trigger "{}"   # only once GUIDED
+```
+
+`resume_stream` refuses while the vehicle is armed and not back in GUIDED — the flight
+controller must be handed control back explicitly (`/j10/vehicle/set_guided`) before
+setpoints resume underneath it, so a resume can never fight an in-progress landing.
+
+## Measuring the latency KPI
+
+```bash
+ros2 run j10_sim latency_probe.py --duration 30
+```
+
+Reports p50/p95/p99 for `/j10/cmd_vel_safe` → setpoint published (the bridge's own
+contribution, budget 20 ms) and → measured velocity response (reaction time, not part of
+the budget). This is the command-leg half of the 300 ms end-to-end KPI; the frame-capture
+half needs `j10_video` (Phase 3).
 
 ## MAVROS plugin allowlist — why it's an allowlist, not a denylist
 
@@ -246,7 +334,9 @@ If a future MAVROS release removes that transform, set
 | SITL exits immediately with a JSON/socket error | Gazebo was not up yet. Start Gazebo first, or raise `sitl_startup_delay`. |
 | `/j10/vehicle/state` never appears | The J10 nodes are not running, or `mavlink.launch.py` was loaded into a single-threaded container. It must be `component_container_mt`. |
 | `connected: false` forever | `fcu_url` and the SITL `--out` endpoint disagree. |
-| Arming refused, `EKF is not reporting a usable estimate` | EKF3 has not settled. Wait ~10 s. If permanent, check `EK3_SRC1_*` and `SIM_FLOW_ENABLE`. |
+| Arming refused, `EKF is not reporting a usable estimate` | EKF3 has not settled. Wait ~10 s. If permanent, `vehicle_state_node`'s log now names the missing flag; on the flow path check `EK3_SRC1_*`, `SIM_FLOW_ENABLE`, and that the rangefinder is actually reporting (`RNGFND1_TYPE 1` + `RNGFND1_PIN`, not `RNGFND1_TYPE 100` alone). On `--extnav`, check `VISO_TYPE` and `SIM_VICON_TMASK`. |
+| Setpoints stop within a second and never come back, vehicle was never even commanded | This is the link-loss stop working as designed on a stream that never started — `handleArmDisarm` requires `setpoints_published_ > 0`, and the stop watchdog needs `cmd_ever_received_` too, but if you're seeing this outside that window check `stream_stop_timeout_sec` isn't set shorter than your publish rate's period. |
+| `link_loss_test.py` reports "FC failsafe verified: FAIL" | `FS_GCS_ENABLE` is 0, or the vehicle was disarmed (ArduPilot does not run the GCS failsafe while disarmed) — the script does not arm the vehicle on purpose, so run it against an already-armed SITL for a real check, or read the two halves separately: the "commands stop" half does not need arming. |
 | Takeoff succeeds, vehicle then sinks | The setpoint stream did not resume. Check for a `takeoff` warning in the bridge log. |
 | Drone twitches once per second and stops | `ros2 topic pub` without `-r 30`. |
 | `/j10/vehicle/state` shows `connected: true` but `pose`/`velocity` stay all-zero with a zero timestamp | Wrong MAVROS source topic. MAVROS is not uniform: `~/`-prefixed plugin topics (`local_position`, `rangefinder`, `setpoint_raw`) resolve to `/mavros/mavros/*`, while `sys_status` uses plain relative names at `/mavros/*`. All source topics are parameters in `j10_mavlink/config/mavlink.yaml`. Confirm a *publisher* exists with `ros2 topic info /mavros/mavros/pose` — a topic can appear in `ros2 topic list` with only our subscriber on it. |
@@ -264,3 +354,9 @@ Phase 1 has no safety filter. Nothing bounds the velocity you publish except the
 own wide saturation limits (`absolute_max_linear_mps`, 2.0 m/s), which are defence in depth
 and **not** a safety system. `j10_safety` lands in build-order step 3, and Phase 2 is the
 phase not to rush.
+
+The video pipeline, the VLA node, and the motion controller do not exist yet — this
+package proves the flight-controller half of the architecture (arm, hover, envelope,
+link-loss), not the full task A pipeline. Only `j10_safety`'s side of the envelope has
+landed; `j10_video`, `j10_vla`, `j10_control` and the round-trip telemetry link are
+unstarted.

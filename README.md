@@ -64,9 +64,10 @@ source install/setup.bash
 ## Status
 
 Phase 1–2 of 7. `j10_interfaces` defines the contract, `j10_mavlink` + `j10_sim` bring up
-ArduCopter SITL in Gazebo with a hand-published velocity command, and `j10_safety` enforces
-the envelope on every command before it reaches the flight controller — **39 unit tests,
-no simulator required, 3 ms to run.** Remaining packages land in build order (see
+ArduCopter SITL in Gazebo with a hand-published velocity command, `j10_control` shapes
+intents into a smooth 30 Hz command, and `j10_safety` enforces the envelope on every
+command before it reaches the flight controller — **62 unit tests, no simulator required,
+milliseconds to run.** Remaining packages land in build order (see
 `docs/ARCHITECTURE.md` §9).
 
 **Runbook: [`src/j10_sim/README.md`](src/j10_sim/README.md)** — prerequisites, bring-up, and

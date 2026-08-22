@@ -84,7 +84,13 @@ vehicle_state_node:
     publish_rate_hz: 20.0
     frame_id: "map"
 
-    pose_timeout_sec: 0.5
+    # 0.5 was too tight against a live SITL run: ArduPilot's default LOCAL_POSITION_NED
+    # stream rate to a fresh MAVLink endpoint hovers around 2 Hz with jitter, producing
+    # gaps of 0.50-0.55 s -- right at the 0.5 s line, so the warning below fired almost
+    # every cycle even though data was arriving normally. 1.0 s gives real margin without
+    # meaningfully weakening the watchdog (a genuinely dead link is still caught well
+    # inside a second).
+    pose_timeout_sec: 1.0
     rangefinder_timeout_sec: 0.5
     flow_timeout_sec: 0.5
     estimator_timeout_sec: 2.0

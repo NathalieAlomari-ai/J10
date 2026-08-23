@@ -63,12 +63,28 @@ source install/setup.bash
 
 ## Status
 
-Phase 1–2 of 7. `j10_interfaces` defines the contract, `j10_mavlink` + `j10_sim` bring up
-ArduCopter SITL in Gazebo with a hand-published velocity command, `j10_control` shapes
-intents into a smooth 30 Hz command, and `j10_safety` enforces the envelope on every
-command before it reaches the flight controller — **62 unit tests, no simulator required,
-milliseconds to run.** Remaining packages land in build order (see
-`docs/ARCHITECTURE.md` §9).
+**Every package in the build order (`docs/ARCHITECTURE.md` §9) now exists.**
+
+| Package | Role | Tests |
+|---------|------|-------|
+| `j10_interfaces` | The message contract everything keys off | — |
+| `j10_mavlink` | Sole owner of the FC interface; 30 Hz setpoint stream | 11 |
+| `j10_sim` | Gazebo world, ArduPilot SITL, indoor parameter set | — |
+| `j10_safety` | The independent guardian — the only node that may veto | 39 |
+| `j10_control` | Intent → smooth 30 Hz command, decays to hover | 23 |
+| `j10_video` | RTP receiver; capture-time stamping, link health | 40 |
+| `j10_telemetry` | Latency percentiles vs. the budget; dataset capture | 41 |
+| `j10_vla` | Inference node + Phase 4 scripted backend | 77 |
+| `j10_mission` | State machine; owns the autonomy permission | 81 |
+| `j10_teleop` | Joystick, deadman, E-stop — top of the arbitration order | 42 |
+
+**354 unit tests, no simulator and no ROS required to run them, milliseconds end to end.**
+That is possible because each package keeps its real logic in a pure core with the ROS
+wrapper kept thin — the safety envelope, the state machine, the RTP clock and the
+percentile maths are all plain C++ or Python.
+
+Phases 3–7 remain: they are bring-up and measurement against real hardware, not new
+packages.
 
 **Phase 1 exit criterion: passed in SITL.** A `TwistStamped` of `linear: {x: 1.0}` held for
 10 s moved the vehicle **+7.85 m along body-forward** with y and z unchanged (-0.05 m,

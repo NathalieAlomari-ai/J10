@@ -8,10 +8,25 @@
 
 /**:
   ros__parameters:
-    # sim_vehicle.py's MAVProxy forwards to 127.0.0.1:14550 and :14551 by default.
-    # run_sitl.sh adds an explicit --out for 14551; MAVROS binds it and learns the remote
-    # endpoint from the first packet.
-    fcu_url: "udp://:14551@"
+    # Originally "udp://:14551@" -- MAVROS listening on the UDP endpoint MAVProxy relays to.
+    # Changed after the Phase 1 arming investigation found the FC's own arm/disarm cycle
+    # working perfectly (confirmed via SITL console: "Arming motors" / "Disarming motors"
+    # in response to MAVProxy's own "arm throttle force" console command), while every
+    # arm attempt routed through MAVROS -- both mavros's own /mavros/cmd/arming service and
+    # our bridge's client to it -- hung forever with zero response, never even a rejection.
+    # The FC's command handling is fine; only requests that go *through MAVROS* fail to get
+    # an ack back. The one thing in that path and not in MAVProxy's own path is MAVProxy
+    # itself, sitting in the middle relaying between ArduCopter's TCP master link and
+    # MAVROS's UDP endpoint -- with two concurrent GCS-side clients (MAVProxy's own console
+    # and MAVROS) sharing that relay, COMMAND_ACK routing back to the correct link/system is
+    # exactly the kind of thing that can get lost.
+    #
+    # Fix: connect MAVROS directly to ArduCopter's native TCP MAVLink server (the same port
+    # MAVProxy's own --master points at) instead of through MAVProxy's relay. This removes
+    # MAVProxy from MAVROS's command round-trip entirely. ArduCopter's SITL TCP server
+    # accepts multiple simultaneous client connections, so MAVProxy's own console/map link
+    # keeps working unaffected on the same port.
+    fcu_url: "tcp://127.0.0.1:5760"
     gcs_url: ""
 
     target_system_id: 1

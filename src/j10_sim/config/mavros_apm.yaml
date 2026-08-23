@@ -47,6 +47,14 @@
     #   setpoint_raw    -> /mavros/setpoint_raw/local — the bridge's core output
     #   command         -> /mavros/cmd/arming, /mavros/cmd/takeoff, /mavros/set_mode
     #   rangefinder     -> /mavros/rangefinder/rangefinder
+    #   param           -> exposes FCU parameters (FRAME_CLASS, ARMING_CHECK, ...) through
+    #                      the standard ROS 2 parameter services on the /mavros/mavros node,
+    #                      so `ros2 param get/set /mavros/mavros <NAME>` reaches the FCU
+    #                      directly. Diagnostic aid for the Phase 1 arming investigation —
+    #                      confirmed via param.cpp source that ~/get_parameters and
+    #                      ~/set_parameters use the plain rcl_interfaces types, not a
+    #                      MAVROS-specific service, so the standard `ros2 param` CLI works
+    #                      with no extra plumbing.
     #
     # px4flow is deliberately excluded — not needed until the real MTF-01 flow path is
     # exercised in Phase 6; vehicle_state_node already treats that topic being entirely
@@ -59,3 +67,4 @@
       - local_position
       - setpoint_raw
       - rangefinder
+      - param

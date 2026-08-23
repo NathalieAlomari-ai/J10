@@ -51,6 +51,26 @@ RNGFND1_MIN_CM  5
 RNGFND1_MAX_CM  800
 SIM_SONAR_SCALE 10
 
+# --- Telemetry stream rates --------------------------------------------------------------
+# ESTIMATOR_STATUS (and PID_TUNING, VIBRATION, ...) live in ArduPilot's "EXTRA4" message
+# group, which is NOT part of MAVProxy's default stream request and is not requested by
+# MAVROS's sys_status plugin either -- confirmed by reading mavros's sys_status.cpp: it
+# subscribes and publishes /mavros/estimator_status, but never sends REQUEST_DATA_STREAM or
+# SET_MESSAGE_INTERVAL to ask the FCU to actually send it. Both of those runtime request
+# mechanisms were also tried live against this SITL build and both failed outright
+# (`/mavros/set_stream_rate` had no visible effect; `/mavros/set_message_interval` for
+# message id 230 came back success=false) -- this ArduPilot build does not seem to honour
+# either at runtime. Setting the stream rate here, at boot, is the one path that has
+# actually worked all session for every other ArduPilot-side setting (FRAME_CLASS,
+# GPS_TYPE, EK3_SRC1_POSZ all only took effect via this file + a wiped eeprom).
+#
+# Without this, vehicle_state_node's ekf_healthy stays false forever -- not because the
+# EKF isn't healthy, but because /mavros/estimator_status never receives a single message,
+# so the ekf_healthy computation (which only runs once estimator_.valid is true) never
+# executes at all. SR0 because MAVProxy's master link binds ArduCopter's first serial
+# channel (SERIAL0/telem1) in this SITL setup.
+SR0_EXTRA4      4
+
 # --- Arming and failsafes for a bench SITL run ------------------------------------------
 # Indoors there is no GPS and no RC transmitter attached to SITL, so the corresponding
 # prearm checks and failsafes would block every test. These relaxations are SITL-only and

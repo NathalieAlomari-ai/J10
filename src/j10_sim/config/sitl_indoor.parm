@@ -5,6 +5,14 @@
 # over MSP uses the same EK3_SRC1_* lines with different sensor type IDs, and those must be
 # checked against the current ArduPilot MTF-01 wiki page before first flight.
 
+# --- Airframe ----------------------------------------------------------------------------
+# Standard quad-X, matching the iris_with_standoffs model this world spawns. Explicit
+# because it was found missing during the Phase 1 arming investigation: `ros2 param get`
+# through mavros returned "Parameter not set" for both, and the FCU logged a persistent
+# "PreArm: Motors: Check frame class and type" on every SITL run regardless of ARMING_CHECK.
+FRAME_CLASS     1
+FRAME_TYPE      1
+
 # --- EKF3 on, GPS off -------------------------------------------------------------------
 AHRS_EKF_TYPE   3
 EK3_ENABLE      1

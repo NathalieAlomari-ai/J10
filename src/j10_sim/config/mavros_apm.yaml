@@ -8,25 +8,27 @@
 
 /**:
   ros__parameters:
-    # Originally "udp://:14551@" -- MAVROS listening on the UDP endpoint MAVProxy relays to.
-    # Changed after the Phase 1 arming investigation found the FC's own arm/disarm cycle
-    # working perfectly (confirmed via SITL console: "Arming motors" / "Disarming motors"
-    # in response to MAVProxy's own "arm throttle force" console command), while every
-    # arm attempt routed through MAVROS -- both mavros's own /mavros/cmd/arming service and
-    # our bridge's client to it -- hung forever with zero response, never even a rejection.
-    # The FC's command handling is fine; only requests that go *through MAVROS* fail to get
-    # an ack back. The one thing in that path and not in MAVProxy's own path is MAVProxy
-    # itself, sitting in the middle relaying between ArduCopter's TCP master link and
-    # MAVROS's UDP endpoint -- with two concurrent GCS-side clients (MAVProxy's own console
-    # and MAVROS) sharing that relay, COMMAND_ACK routing back to the correct link/system is
-    # exactly the kind of thing that can get lost.
+    # MAVROS listens on the UDP endpoint MAVProxy relays to (run_sitl.sh passes an explicit
+    # --out for 14551; MAVROS binds it and learns the remote endpoint from the first packet).
     #
-    # Fix: connect MAVROS directly to ArduCopter's native TCP MAVLink server (the same port
-    # MAVProxy's own --master points at) instead of through MAVProxy's relay. This removes
-    # MAVProxy from MAVROS's command round-trip entirely. ArduCopter's SITL TCP server
-    # accepts multiple simultaneous client connections, so MAVProxy's own console/map link
-    # keeps working unaffected on the same port.
-    fcu_url: "tcp://127.0.0.1:5760"
+    # tcp://127.0.0.1:5760 -- connecting straight to ArduCopter's own MAVLink server,
+    # bypassing MAVProxy -- was tried during the Phase 1 arming investigation on the theory
+    # that MAVProxy's relay was losing COMMAND_ACKs. It was not: with the direct TCP link
+    # confirmed live ("FCU URL: tcp://127.0.0.1:5760" in mavros_node's own startup log),
+    # /mavros/cmd/arming still hung with no response at all, exactly as it did over UDP. So
+    # MAVProxy is not the culprit, and the direct TCP link is strictly worse here -- it also
+    # turned out to be flaky, dropping to connected:false on /mavros/state within a minute
+    # or two on this machine, which the UDP relay never did. Reverted.
+    #
+    # What the arming hang actually is: commands that need a COMMAND_ACK back from the FCU
+    # fail across the board on this ArduPilot build (V4.8.0-dev) -- arming, AUTOPILOT_VERSION
+    # ("VER: ... command plugin service call failed!" on every startup), and
+    # SET_MESSAGE_INTERVAL (success=false) all fail the same way, while set_mode, which needs
+    # no ack, works instantly. That points at a MAVLink-level compatibility problem between
+    # this mavros build and this ArduPilot dev build, not at the link type or at our code --
+    # the FC itself arms fine when asked by MAVProxy directly. Tracked as a follow-up; for
+    # now SITL arming is done by hand through MAVProxy's console.
+    fcu_url: "udp://:14551@"
     gcs_url: ""
 
     target_system_id: 1

@@ -80,6 +80,18 @@ FS_THR_ENABLE   0
 FS_GCS_ENABLE   0
 BRD_SAFETYENABLE 0
 
+# ArduCopter auto-disarms an idle armed-but-landed vehicle after DISARM_DELAY seconds (10s
+# default) of near-zero throttle -- confirmed live: "FCU: Arming motors" followed by
+# "FCU: Disarming motors" ~15s later on every SITL arm attempt this session, with no
+# commanded motion in between. Because MAVROS's own arm service hangs on this ArduPilot
+# build (see mavros_apm.yaml's fcu_url comment) and arming has to be done by hand through
+# MAVProxy's console instead, that ~10-15s window was nowhere near enough time to also
+# switch to GUIDED and get a real velocity command onto /j10/cmd_vel_safe by hand across
+# several terminals. 0 disables the auto-disarm entirely so there's no clock to race while
+# proving the Phase 1 exit criterion. SITL bench-testing convenience only -- a real airframe
+# must keep its normal auto-disarm behaviour.
+DISARM_DELAY    0
+
 # --- Guided mode behaviour ---------------------------------------------------------------
 # The bridge streams setpoints at 30 Hz continuously, so this timeout should never trip.
 # Left at the default value explicitly so a change in ArduPilot defaults is visible here.

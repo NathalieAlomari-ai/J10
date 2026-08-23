@@ -110,6 +110,21 @@ ros2 launch j10_mavlink mavlink.launch.py
 
 ## The Phase 1 test
 
+> **Status: PASSED**, on ArduCopter V4.8.0-dev (cad79ca7) + Gazebo Harmonic, using the
+> workaround bring-up in "If arming or takeoff hangs" below rather than the clean path
+> documented here. Measured result, with the vehicle in GUIDED at ~53 m:
+>
+> | | before | after 10 s of `linear: {x: 1.0}` | delta |
+> |---|---|---|---|
+> | x (body forward) | -28.414 | -20.560 | **+7.85 m** |
+> | y | -38.738 | -38.784 | -0.05 m |
+> | z | 53.003 | 52.993 | -0.01 m |
+>
+> Motion on the commanded axis only, ~7.9 m against a ~10 m ideal (the difference is
+> accel/decel ramp at each end). On releasing the command the vehicle came to rest
+> immediately — 1.6 mm of x drift between the stop and the following sample, well inside
+> the 1 s the exit criterion allows.
+
 ### Step 1 — confirm the link
 
 ```bash
@@ -181,6 +196,64 @@ x, the FLU/FRD transform is being applied twice — see "Frame conventions" belo
 ros2 service call /mavros/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'LAND'}"
 ros2 service call /j10/vehicle/arm j10_interfaces/srv/ArmDisarm "{arm: false}"
 ```
+
+---
+
+## If arming or takeoff hangs — known MAVROS/ArduPilot 4.8-dev incompatibility
+
+On ArduCopter **V4.8.0-dev (cad79ca7)** with the MAVROS in Humble, every MAVLink command
+that expects a `COMMAND_ACK` back never gets one. Steps 2 and 4 above therefore hang with
+no response at all — not a rejection, just silence:
+
+- `/mavros/cmd/arming` — hangs forever, over the UDP relay *and* over a direct
+  `tcp://127.0.0.1:5760` link to ArduCopter (both tested)
+- `/mavros/cmd/takeoff` — same
+- `AUTOPILOT_VERSION` — mavros logs `VER: ... command plugin service call failed!` on every
+  single startup, five retries, then gives up
+- `SET_MESSAGE_INTERVAL` (`/mavros/set_message_interval`) — returns `success=false`
+
+Commands that need **no** ack work perfectly and instantly on the same link:
+`/mavros/set_mode`, and the whole `setpoint_raw` stream the bridge depends on. Telemetry in
+the other direction (`/mavros/state`, pose, velocity) is likewise fine. The FC itself is
+healthy — MAVProxy's own console arms it immediately with
+`Got COMMAND_ACK: COMPONENT_ARM_DISARM: ACCEPTED`.
+
+So this is a MAVLink-level incompatibility between these two specific builds, not a J10 bug
+and not a link problem. The real fix is a matched pair of versions (a stable ArduCopter
+release rather than 4.8-dev, or a newer MAVROS). Until then, bring the vehicle up by hand
+through MAVProxy's console and let the bridge fly it:
+
+```
+# in MAVProxy's console (SITL terminal). Parameter names differ on 4.8: GPS1_TYPE, not GPS_TYPE.
+param show GPS1_TYPE          # expect 1; `status GPS_RAW_INT` should show fix_type 6
+arm throttle force            # "Got COMMAND_ACK: COMPONENT_ARM_DISARM: ACCEPTED" / "ARMED"
+mode 2                        # ALT_HOLD. `mode althold` is not recognised; the number is.
+rc 3 1650                     # climb. watch `height` in the console
+rc 3 1500                     # neutral throttle once high enough
+mode guided                   # now accepted -- GUIDED needs a position estimate, and the
+                              # EKF only solves one once airborne
+```
+
+Then publish `/j10/cmd_vel_safe` as in Step 3. Everything downstream of the mode change is
+the normal path — the bridge's `setpoint_raw` stream drives the vehicle exactly as designed.
+
+Two gotchas this bring-up runs into:
+
+- **`mode guided` on the ground fails** with `Mode change to Guided failed: requires
+  position`, and once in GUIDED on the ground, velocity setpoints are ignored — ArduPilot
+  will not accept them until the vehicle is flying. Climb in ALT_HOLD first. (Indoors the
+  EKF's only horizontal source would be optical flow, which reports `quality: 51` and real
+  `flow_rate_*` here but `ground_distance: 0.0`, because the simulated rangefinder feeding it
+  produces nothing — see the `EK3_SRC1_POSZ` comment in `config/sitl_indoor.parm`. SITL's
+  GPS covers for it in the meantime.)
+- **Only one bridge instance may be running.** `ros2 topic info /mavros/mavros/local` must
+  report `Publisher count: 1`. Interrupted launches leave containers behind, and several
+  bridges publishing at 30 Hz fight each other — the extras stream zeros and the vehicle
+  won't move. `pkill -9 -f component_container_mt` and relaunch once.
+
+Because arming is manual here, `DISARM_DELAY 0` is set in `config/sitl_indoor.parm` — with
+ArduPilot's default 10 s auto-disarm there is not enough time to arm, switch mode, and get a
+command published by hand before the FC disarms itself again.
 
 ---
 

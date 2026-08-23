@@ -70,6 +70,13 @@ command before it reaches the flight controller — **62 unit tests, no simulato
 milliseconds to run.** Remaining packages land in build order (see
 `docs/ARCHITECTURE.md` §9).
 
+**Phase 1 exit criterion: passed in SITL.** A `TwistStamped` of `linear: {x: 1.0}` held for
+10 s moved the vehicle **+7.85 m along body-forward** with y and z unchanged (-0.05 m,
+-0.01 m), and releasing the command brought it to rest with 1.6 mm of drift — inside the
+1 s the criterion allows. Note that arming and takeoff currently need a manual MAVProxy
+bring-up on this ArduCopter build; see
+[the runbook](src/j10_sim/README.md#if-arming-or-takeoff-hangs--known-mavrosardupilot-48-dev-incompatibility).
+
 **Runbook: [`src/j10_sim/README.md`](src/j10_sim/README.md)** — prerequisites, bring-up, and
 the Phase 1 exit test.
 

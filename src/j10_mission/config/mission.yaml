@@ -1,0 +1,46 @@
+mission_manager_node:
+  ros__parameters:
+    # 5 Hz per docs/ARCHITECTURE.md. The tick is not cosmetic: entering autonomy is a
+    # one-time decision, but *staying* in it is a continuous claim, and this is what
+    # re-checks that claim and demotes to HOLD when it stops holding.
+    tick_rate_hz: 5.0
+
+    # --- Topics ---
+    vehicle_state_topic: "/j10/vehicle/state"
+    safety_status_topic: "/j10/safety/status"
+    video_status_topic: "/j10/video/status"
+    instruction_topic: "/j10/mission/instruction"
+    autonomy_topic: "/j10/mission/autonomy_enabled"
+    mission_state_topic: "/j10/mission/state"
+
+    # --- Preflight guards ---
+    # Conservative on purpose. Phase 7 tightens these after each clean envelope; nothing
+    # here should ever be loosened to make a test pass.
+    min_battery_percentage: 0.30
+
+    # A vehicle snapshot older than this is not evidence about the present, so it is
+    # treated as no evidence at all. Matches the freshness discipline in j10_safety.
+    max_state_age_sec: 1.0
+
+    require_ekf_for_arm: true
+    require_guided_for_autonomy: true
+
+    # Off until Phase 3 lands j10_video -- /j10/video/status has no publisher before then,
+    # and requiring it would make VLA_ACTIVE unreachable in the Phase 4 configuration.
+    # Turn ON before any real model flies: a VLA with no video is flying blind.
+    require_video_for_autonomy: false
+
+    # Refuse to hand control to the model while still on the ground. ArduPilot ignores
+    # velocity setpoints until the vehicle is flying, so entering VLA_ACTIVE at zero
+    # altitude would report autonomy while doing nothing at all.
+    #
+    # Note this is an *entry* gate only. Autonomy is not revoked for descending below it --
+    # a commanded descent is the model doing its job, and revoking there would fight the
+    # behaviour autonomy was granted to perform.
+    min_autonomy_altitude_m: 0.3
+
+    # Whether `force` on /j10/mission/set_state is honoured. The state machine cannot tell
+    # SITL from a real autopilot, so this is a deliberate configuration choice rather than
+    # something inferred. Even when true, force only skips the readiness guards -- it never
+    # unlocks an illegal transition, so it cannot be used to jump into autonomy.
+    allow_force: false

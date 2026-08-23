@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>j10_video</name>
+  <version>0.1.0</version>
+  <description>
+    Video receiver. Owns one GStreamer pipeline (udpsrc -> rtph264depay -> avdec_h264 ->
+    videoconvert -> appsink), publishes sensor_msgs/Image stamped with capture time
+    reconstructed from the sender's RTP clock rather than arrival time, and reports link
+    health so the safety filter can treat loss of video as loss of autonomy. Stream loss is
+    declared within 500 ms.
+  </description>
+  <maintainer email="info@jnhsystems.com">JNH Systems</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>pkg-config</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend>
+  <depend>j10_interfaces</depend>
+
+  <depend>libgstreamer1.0-dev</depend>
+  <depend>libgstreamer-plugins-base1.0-dev</depend>
+
+  <!-- avdec_h264 lives in gstreamer1.0-libav; rtph264depay and rtpjitterbuffer in
+       gstreamer1.0-plugins-good. Runtime only -- the pipeline is built from a string. -->
+  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
+  <exec_depend>gstreamer1.0-libav</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

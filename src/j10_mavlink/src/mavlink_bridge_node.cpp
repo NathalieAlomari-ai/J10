@@ -274,7 +274,12 @@ bool MavlinkBridgeNode::callService(
 {
   const auto timeout = std::chrono::duration<double>(params_.service_timeout_sec);
 
-  if (!client->wait_for_service(1s)) {
+  // Was hardcoded to 1s regardless of service_timeout_sec -- too short for DDS service
+  // discovery to complete on a loaded machine (observed in practice: MAVROS's service was
+  // confirmed present via `ros2 service list`, yet this wait still failed). Use the same
+  // configurable timeout as the response wait below, so slow discovery and a slow FC
+  // response are governed by one knob, not two.
+  if (!client->wait_for_service(std::chrono::duration_cast<std::chrono::nanoseconds>(timeout))) {
     error = std::string("MAVROS service ") + client->get_service_name() +
       " is not available — is mavros_node running and connected?";
     return false;

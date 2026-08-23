@@ -67,9 +67,6 @@ def generate_launch_description():
         DeclareLaunchArgument('ardupilot_gazebo', default_value=default_ardupilot_gazebo,
                               description='Built ardupilot_gazebo checkout.'),
 
-        DeclareLaunchArgument('fcu_url', default_value='udp://:14551@',
-                              description='MAVROS link to SITL. Must match the --out '
-                                          'endpoint run_sitl.sh passes to sim_vehicle.py.'),
         DeclareLaunchArgument('mavros_config',
                               default_value=os.path.join(
                                   sim_share, 'config', 'mavros_apm.yaml'),
@@ -134,9 +131,19 @@ def generate_launch_description():
                 name='mavros',
                 namespace='mavros',
                 output='screen',
+                # fcu_url used to also be overridable as its own launch argument here, with
+                # a separate hardcoded default ('udp://:14551@') that silently took priority
+                # over whatever mavros_config's fcu_url said -- a later entry in a ROS 2
+                # parameters=[...] list always wins over an earlier one for the same key.
+                # That meant editing mavros_apm.yaml's fcu_url (e.g. the switch to
+                # tcp://127.0.0.1:5760 made during the Phase 1 arming investigation) had no
+                # effect at all unless fcu_url was *also* passed explicitly on every launch
+                # command line -- confirmed live: the yaml on disk read
+                # tcp://127.0.0.1:5760, but mavros_node's own startup log kept printing
+                # "FCU URL: udp://:14551@" every single run. Removed; mavros_config is now
+                # the only place fcu_url is set.
                 parameters=[
                     LaunchConfiguration('mavros_config'),
-                    {'fcu_url': LaunchConfiguration('fcu_url')},
                 ],
             )
         ],

@@ -57,9 +57,27 @@ mkdir -p ~/j10_ws/src && cd ~/j10_ws
 git clone https://github.com/NathalieAlomari-ai/J10.git .
 vcs import src < j10.repos
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
+colcon build
 source install/setup.bash
 ```
+
+Run the tests with `colcon test && colcon test-result --verbose`. A clean run is
+**452 tests, 0 errors, 0 failures** (that count includes the linters, which colcon reports
+as tests alongside the 354 unit tests).
+
+Two things that will bite you once each, both environment rather than code:
+
+- **`colcon build --symlink-install` after a plain `colcon build`** (or the reverse) fails
+  with *"failed to create symbolic link ... because existing path cannot be removed"*. The
+  two layouts are not interchangeable in one build tree. Pick one and stick to it; to
+  switch, `rm -rf build install log` first.
+- **`pytest.missing_result` on the three Python packages** means pytest could not start at
+  all. ROS 2 Humble's own plugins and a modern `anyio` bracket the usable pytest range from
+  both sides: below 7.0, `anyio`'s plugin fails importing `_pytest.scope`; from 8.0,
+  `launch_testing`'s plugin uses a `path` hook argument pytest removed. **pytest 7.x
+  satisfies both** — `pip3 install --user "pytest==7.4.4"`. Note the failure is in pytest's
+  *startup*, so it reports zero tests rather than failing ones, which reads like the suite
+  is empty rather than broken.
 
 ## Status
 

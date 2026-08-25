@@ -62,6 +62,15 @@ install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+
+  # Same opt-out as the rest of the workspace -- see the note in j10_mavlink/CMakeLists.txt.
+  # The repository carries no license headers and no uncrustify pass has been run, so these
+  # three would be permanently red, which trains people to ignore CI. Re-enable them across
+  # the whole workspace at once when a formatting pass is adopted, not package by package.
+  set(ament_cmake_copyright_FOUND TRUE)
+  set(ament_cmake_uncrustify_FOUND TRUE)
+  set(ament_cmake_cpplint_FOUND TRUE)
+
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)

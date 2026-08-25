@@ -1,4 +1,5 @@
-"""Bring up the two j10_mavlink nodes.
+"""
+Bring up the two j10_mavlink nodes.
 
 Both nodes run inside one ``component_container_mt`` with intra-process comms, per
 docs/ARCHITECTURE.md section 4. The ``_mt`` container is required, not preferred:

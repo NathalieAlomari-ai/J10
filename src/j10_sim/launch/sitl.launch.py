@@ -1,4 +1,5 @@
-"""Phase 1 bring-up: Gazebo + ArduPilot SITL + MAVROS + the j10_mavlink nodes.
+"""
+Phase 1 bring-up: Gazebo + ArduPilot SITL + MAVROS + the j10_mavlink nodes.
 
 Each stage can be switched off so the pieces can be run in separate terminals while
 debugging, which is usually what you want the first time through:

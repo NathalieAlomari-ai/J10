@@ -1,4 +1,5 @@
-"""Bring up the motion controller.
+"""
+Bring up the motion controller.
 
 Sits on the realtime path, so in flight it belongs in the same ``component_container_mt``
 as the video receiver, safety filter and MAVLink bridge -- ``use_composition:=true`` loads

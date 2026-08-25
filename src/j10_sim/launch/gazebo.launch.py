@@ -1,4 +1,5 @@
-"""Start Gazebo on the J10 indoor world.
+"""
+Start Gazebo on the J10 indoor world.
 
 Deliberately shells out to ``gz sim`` rather than going through ``ros_gz_sim``. Phase 1
 needs no ROS<->Gazebo bridging at all — ArduPilot talks to the ArduPilotPlugin over its own

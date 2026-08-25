@@ -1,4 +1,5 @@
-"""Bring up the safety filter.
+"""
+Bring up the safety filter.
 
 Standalone by default. The filter sits on the realtime path, so in flight it belongs in
 the same ``component_container_mt`` as the video receiver, motion controller and MAVLink

@@ -94,6 +94,7 @@ private:
   double rangefinder_max_range_m_;
   double flow_quality_threshold_;
   bool require_pos_horiz_abs_;
+  bool allow_derived_ekf_health_;
 };
 
 }  // namespace j10_mavlink

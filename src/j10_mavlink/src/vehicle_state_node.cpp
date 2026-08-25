@@ -35,6 +35,11 @@ VehicleStateNode::VehicleStateNode(const rclcpp::NodeOptions & options)
   // would make ekf_healthy permanently false and block arming.
   require_pos_horiz_abs_ = declare_parameter("require_pos_horiz_abs", false);
 
+  // Off by default: a flag the FC actually reports is strictly better evidence than one
+  // inferred from a side effect. Turn on only where ESTIMATOR_STATUS is known to be absent
+  // -- see the fallback branch in onPublishTimer() for what it can and cannot recover.
+  allow_derived_ekf_health_ = declare_parameter("allow_derived_ekf_health", false);
+
   // --- Source topic names ---
   //
   // These are parameters, and the defaults are NOT uniform, because MAVROS itself is not
@@ -137,6 +142,16 @@ VehicleStateNode::VehicleStateNode(const rclcpp::NodeOptions & options)
     "  sources: state=%s pose=%s velocity=%s battery=%s rangefinder=%s estimator=%s",
     state_topic.c_str(), pose_topic.c_str(), velocity_topic.c_str(),
     battery_topic.c_str(), rangefinder_topic.c_str(), estimator_status_topic.c_str());
+
+  if (allow_derived_ekf_health_) {
+    // Loud on purpose: a derived flag must never be read back from a log as a reported one.
+    RCLCPP_WARN(
+      get_logger(),
+      "allow_derived_ekf_health is TRUE -- if %s never publishes, ekf_healthy will be "
+      "inferred from a fresh, finite pose rather than reported by the FC. Per-axis EKF "
+      "status and accel error flags are NOT covered by that inference.",
+      estimator_status_topic.c_str());
+  }
 }
 
 void VehicleStateNode::onPublishTimer()
@@ -238,6 +253,32 @@ void VehicleStateNode::onPublishTimer()
       healthy = healthy && e.pos_horiz_abs_status_flag;
     }
     msg.ekf_healthy = fresh && healthy;
+  } else if (allow_derived_ekf_health_) {
+    // Fallback for a flight controller that never sends ESTIMATOR_STATUS at all.
+    //
+    // Observed on ArduCopter V4.8.0-dev: /mavros/estimator_status receives nothing, because
+    // MAVROS never requests the message (confirmed in sys_status.cpp) and every runtime
+    // mechanism for asking -- set_stream_rate, set_message_interval, the legacy SRx_EXTRA4
+    // parameter -- either fails or no longer exists on that build. The branch above then
+    // leaves ekf_healthy false forever, which is a *false negative*: it says nothing about
+    // the EKF, only that we cannot hear it. Downstream that reads as an unhealthy vehicle,
+    // and j10_safety correctly zeroes every command, so the whole autonomy chain is dead
+    // for want of a telemetry stream.
+    //
+    // A fresh, finite local position is real evidence, not a guess. ArduPilot derives
+    // LOCAL_POSITION_NED from the EKF solution; with no usable estimate there is no
+    // solution to publish. So a pose arriving on time, with finite numbers, means the EKF
+    // is producing exactly what the flag would have asserted.
+    //
+    // What this deliberately does NOT recover is the detail: accelerometer error flags and
+    // the individual per-axis status bits are invisible here. That is why it is opt-in and
+    // off by default -- a reported flag is strictly better evidence than an inferred one,
+    // and this should be switched on only where the stream is known to be absent.
+    const auto age = pose_.age(stamp);
+    const bool fresh = pose_.valid && age.has_value() && *age <= pose_timeout_sec_;
+    const auto & p = msg.pose.pose.position;
+    const bool finite = std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+    msg.ekf_healthy = fresh && finite;
   }
 
   // --- Power ---

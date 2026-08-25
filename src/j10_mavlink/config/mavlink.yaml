@@ -116,3 +116,21 @@ vehicle_state_node:
     # Indoors there is no GPS, so absolute horizontal position is never solved. Requiring it
     # would pin ekf_healthy to false and block arming forever.
     require_pos_horiz_abs: false
+
+    # Derive ekf_healthy from a fresh, finite local position when the flight controller
+    # never sends ESTIMATOR_STATUS at all.
+    #
+    # TRUE here because this ArduCopter build (V4.8.0-dev) does not: /mavros/estimator_status
+    # receives nothing, MAVROS never requests the message, and every runtime way of asking
+    # for it fails on that build. Left false, ekf_healthy is a permanent *false negative* --
+    # it reports nothing about the EKF, only that we cannot hear it -- and j10_safety then
+    # correctly zeroes every command, which takes the whole autonomy chain down for want of
+    # a telemetry stream.
+    #
+    # The inference is evidence-based, not a bypass: ArduPilot derives LOCAL_POSITION_NED
+    # from the EKF solution, so a pose arriving on time with finite numbers means the EKF is
+    # producing what the flag would have asserted. What it cannot recover is the detail --
+    # accelerometer error flags and the per-axis status bits stay invisible. Set back to
+    # false on any autopilot that reports ESTIMATOR_STATUS properly; a flag the FC actually
+    # sends is always the better evidence.
+    allow_derived_ekf_health: true

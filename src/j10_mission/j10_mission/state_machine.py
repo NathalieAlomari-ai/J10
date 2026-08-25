@@ -256,6 +256,30 @@ class MissionStateMachine:
 
     # -- Guards ---------------------------------------------------------------------------
 
+    def _battery_too_low(self, facts: VehicleFacts) -> Tuple[bool, str]:
+        """(True, reason) when the battery is known to be below the minimum.
+
+        A negative percentage means *unknown*, not empty -- MAVROS reports -0.01 when the
+        autopilot sends no battery telemetry at all, which is the normal case in SITL and on
+        any vehicle without a monitored pack. Comparing it against the minimum directly
+        would read "unknown" as "flat" and refuse every transition.
+
+        j10_safety already draws exactly this distinction in its battery failsafe ("Unknown
+        charge (negative) is not treated as empty"). Two safety-relevant components
+        disagreeing about what a negative battery means is itself a hazard, so this matches
+        it deliberately rather than by coincidence.
+
+        This does weaken preflight where telemetry is genuinely missing: the check can only
+        catch a battery it can read. That is a limit of the evidence, not a bypass -- and a
+        vehicle whose pack is unmonitored has no low-battery protection to give up.
+        """
+        if facts.battery_percentage < 0.0:
+            return False, ''
+        if facts.battery_percentage < self._guards.min_battery_percentage:
+            return True, (f'battery {facts.battery_percentage:.0%} below minimum '
+                          f'{self._guards.min_battery_percentage:.0%}')
+        return False, ''
+
     def _check_guards(self, target: str, facts: VehicleFacts) -> Tuple[bool, str]:
         g = self._guards
 
@@ -273,17 +297,17 @@ class MissionStateMachine:
             return False, f'vehicle state is stale ({age}, limit {g.max_state_age_sec:.2f}s)'
 
         if target == PREFLIGHT:
-            if facts.battery_percentage < g.min_battery_percentage:
-                return False, (f'battery {facts.battery_percentage:.0%} below preflight '
-                               f'minimum {g.min_battery_percentage:.0%}')
+            low, why = self._battery_too_low(facts)
+            if low:
+                return False, why
             return True, ''
 
         if target == ARMED:
             if g.require_ekf_for_arm and not facts.ekf_healthy:
                 return False, 'EKF is not reporting a usable estimate'
-            if facts.battery_percentage < g.min_battery_percentage:
-                return False, (f'battery {facts.battery_percentage:.0%} below minimum '
-                               f'{g.min_battery_percentage:.0%}')
+            low, why = self._battery_too_low(facts)
+            if low:
+                return False, why
             return True, ''
 
         if target == TAKEOFF:

@@ -335,3 +335,38 @@ class TestConstruction:
         assert g.require_guided_for_autonomy is True
         assert g.min_battery_percentage > 0.0
         assert g.min_autonomy_altitude_m > 0.0
+
+
+class TestUnknownBattery:
+    """A negative battery percentage means unknown, not empty.
+
+    MAVROS reports -0.01 when the autopilot sends no battery telemetry, which is the normal
+    case in SITL. Read as "flat", it refuses every transition and the vehicle never leaves
+    IDLE -- and the failure message blames a battery that was never measured.
+    """
+
+    def test_unknown_battery_does_not_block_preflight(self):
+        result = MissionStateMachine().request(PREFLIGHT, healthy(battery_percentage=-0.01))
+        assert result.accepted, result.message
+
+    def test_unknown_battery_does_not_block_arming(self):
+        result = machine_at(PREFLIGHT).request(ARMED, healthy(battery_percentage=-0.01))
+        assert result.accepted, result.message
+
+    def test_a_genuinely_low_battery_still_blocks(self):
+        # The guard must still do its job whenever there is a reading to judge.
+        result = MissionStateMachine().request(PREFLIGHT, healthy(battery_percentage=0.05))
+        assert not result.accepted
+        assert 'battery' in result.message
+
+    def test_zero_percent_is_treated_as_read_and_empty_not_unknown(self):
+        # 0.0 is a measurement; only a negative is the "no telemetry" sentinel.
+        result = MissionStateMachine().request(PREFLIGHT, healthy(battery_percentage=0.0))
+        assert not result.accepted
+
+    def test_the_whole_sequence_completes_with_no_battery_telemetry(self):
+        m = MissionStateMachine()
+        m.set_instruction('fly the pattern')
+        for step in (PREFLIGHT, ARMED, TAKEOFF, VLA_ACTIVE):
+            assert m.request(step, healthy(battery_percentage=-0.01)).accepted, step
+        assert m.autonomy_enabled() is True

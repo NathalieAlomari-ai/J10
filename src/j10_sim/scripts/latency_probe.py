@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Measure the command leg of the end-to-end latency budget.
+"""
+Measure the command leg of the end-to-end latency budget.
 
 Task A's KPI is "end-to-end latency (frame -> command at FC) <= 300 ms". The frame half of
 that needs j10_video, which lands in Phase 3. This measures the half that exists today:
@@ -18,7 +19,6 @@ Run it against a flying vehicle, after arm and takeoff:
 """
 
 import argparse
-import statistics
 import sys
 
 import rclpy

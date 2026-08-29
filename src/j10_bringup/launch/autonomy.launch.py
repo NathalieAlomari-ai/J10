@@ -45,11 +45,13 @@ def generate_launch_description():
 
         DeclareLaunchArgument('safety_params', default_value=params('j10_safety', 'safety.yaml'),
                               description='Parameter file for safety_filter_node.'),
-        DeclareLaunchArgument('control_params', default_value=params('j10_control', 'control.yaml'),
+        DeclareLaunchArgument('control_params',
+                              default_value=params('j10_control', 'control.yaml'),
                               description='Parameter file for motion_controller_node.'),
         DeclareLaunchArgument('vla_params', default_value=params('j10_vla', 'vla.yaml'),
                               description='Parameter file for vla_inference_node.'),
-        DeclareLaunchArgument('mission_params', default_value=params('j10_mission', 'mission.yaml'),
+        DeclareLaunchArgument('mission_params',
+                              default_value=params('j10_mission', 'mission.yaml'),
                               description='Parameter file for mission_manager_node.'),
     ]
 

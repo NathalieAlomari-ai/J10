@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Prove the task A link-loss KPI, not just assume it.
+"""
+Prove the task A link-loss KPI, not just assume it.
 
     "Link-loss safety: stop commands on stream drop -> FC failsafe takes over"
     KPI: "Commands stop <= 1 s after link loss; FC failsafe verified"

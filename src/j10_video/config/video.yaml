@@ -1,0 +1,45 @@
+video_receiver_node:
+  ros__parameters:
+    # UDP port the Pi's GStreamer service sends RTP to.
+    port: 5600
+
+    frame_id: "camera_optical_frame"
+
+    # --- Topics ---
+    image_topic: "/j10/camera/image_raw"
+    camera_info_topic: "/j10/camera/camera_info"
+    status_topic: "/j10/video/status"
+    latency_topic: "/j10/telemetry/latency"
+
+    # --- Link health ---
+    # 500 ms is the figure in docs/ARCHITECTURE.md, and the Phase 3 exit criterion asserts
+    # detection within it. j10_safety treats loss of video as loss of autonomy, so this
+    # number is how long a blind model could keep being trusted.
+    loss_timeout_sec: 0.5
+
+    expected_fps: 30.0
+
+    # Below 60% of expected the link is DEGRADED rather than STREAMING -- not lost, but not
+    # trustworthy for autonomy either, since the model would be acting on stale scenery.
+    degraded_fps_fraction: 0.6
+
+    fps_window_sec: 1.0
+
+    # One corrupt frame on a wireless link is normal; a steady trickle is not. Flagging
+    # single errors would train the operator to ignore the warning.
+    degraded_decode_errors: 3
+
+    # Faster than the loss timeout on purpose. At 1 Hz a declared loss could sit unseen
+    # downstream for most of a second -- the timeout would be met internally and missed in
+    # practice.
+    status_rate_hz: 5.0
+
+    # --- RTP clock ---
+    # 90 kHz is the standard H.264 RTP clock rate (RFC 6184).
+    rtp_clock_hz: 90000.0
+
+    # Re-anchor when reconstructed capture time drifts this far from arrival. Must stay far
+    # above any plausible real pipeline latency: if ordinary transport delay triggered a
+    # re-anchor, every frame would end up stamped with its arrival time, silently reverting
+    # to the behaviour the RTP reconstruction exists to avoid.
+    rtp_resync_threshold_sec: 2.0

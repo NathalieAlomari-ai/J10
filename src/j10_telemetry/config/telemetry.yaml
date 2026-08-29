@@ -1,0 +1,42 @@
+latency_monitor_node:
+  ros__parameters:
+    # 1 Hz per docs/ARCHITECTURE.md. This node measures; it never acts, so there is nothing
+    # to be gained from running it faster than a human reads it.
+    publish_rate_hz: 1.0
+
+    latency_topic: "/j10/telemetry/latency"
+    diagnostics_topic: "/diagnostics"
+
+    # 300 samples. At the 30 Hz the video path runs at that is ten seconds -- long enough
+    # for a stable p99, short enough that the numbers still describe now rather than the
+    # whole flight. A rough startup ages out instead of depressing the figures all run.
+    window_samples: 300
+
+    # The number the whole budget defends. Section 6 puts a nominal pipeline at 133-263 ms,
+    # so the headroom here is thin by design -- which is the reason for measuring.
+    end_to_end_budget_ms: 300.0
+
+    # Per-stage p95 budgets, as two parallel lists because ROS 2 parameters cannot express
+    # a string->double map. Leave both empty to use the documented defaults from section 6,
+    # which is what latency_monitor_node.DEFAULT_BUDGETS_MS holds.
+    budget_stage_names: []
+    budget_stage_ms: []
+
+dataset_recorder_node:
+  ros__parameters:
+    output_dir: "~/j10_datasets"
+
+    image_topic: "/j10/camera/image_raw"
+    intent_topic: "/j10/vla/intent"
+    vehicle_state_topic: "/j10/vehicle/state"
+    safety_status_topic: "/j10/safety/status"
+    mission_state_topic: "/j10/mission/state"
+
+    # Recording is armed by service call (/j10/telemetry/record), never automatically: a
+    # recorder that started with the node would fill the companion's disk across a day of
+    # bench runs with bags that are mostly idle ground time.
+    #
+    # Stopping when the mission leaves autonomy keeps the bags to the part worth keeping --
+    # the model flying, rather than the operator getting the vehicle back down.
+    stop_on_mission_exit: true
+    autonomous_state: "VLA_ACTIVE"

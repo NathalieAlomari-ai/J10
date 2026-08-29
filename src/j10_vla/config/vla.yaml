@@ -1,0 +1,72 @@
+vla_inference_node:
+  ros__parameters:
+    # --- Backend ---
+    # Only 'scripted' exists today. A real checkpoint backend lands in Phase 5; the node
+    # refuses an unknown name rather than falling back, because a silent downgrade to the
+    # scripted pattern would look exactly like a working model run in the logs.
+    backend: "scripted"
+
+    # 5-10 Hz per docs/ARCHITECTURE.md. This is a ceiling, not a promise -- if inference
+    # overruns the period the worker simply goes round again. The 30 Hz motion controller
+    # is what covers the gaps between intents, which is the entire reason for the two-rate
+    # split.
+    inference_rate_hz: 6.0
+
+    # --- Topics ---
+    intent_topic: "/j10/vla/intent"
+    image_topic: "/j10/camera/image_raw"
+    instruction_topic: "/j10/mission/instruction"
+    vehicle_state_topic: "/j10/vehicle/state"
+    latency_topic: "/j10/telemetry/latency"
+
+    # --- Freshness ---
+    # A frame older than this is not evidence about the present, so it stops counting as
+    # usable input.
+    max_image_age_sec: 0.5
+
+    # FALSE is correct only for the Phase 4 scripted pattern, which is flown with no camera
+    # at all. Set TRUE before any real model: a VLA with no image is not navigating, it is
+    # guessing. The node logs a warning at startup while this is false.
+    require_image: false
+
+    # Hard ceiling on how long any single intent stays valid, applied to every decision on
+    # the way out. This is what stops a backend granting itself long unsupervised authority
+    # by returning a large duration -- see Decision.sanitized(). The motion controller
+    # decays to hover once it elapses.
+    max_intent_duration_sec: 1.0
+
+    # --- Scripted backend (Phase 4) ---
+    # "ACTION vx vy vz yaw_rate seconds", body-FLU (x forward, y left, z up).
+    # A flat string list because ROS 2 parameters cannot carry a list of maps.
+    #
+    # The default is a closed square at Phase 7 indoor speed (0.3 m/s) with a settle between
+    # legs: it returns roughly to where it started, so a loop can run unattended inside a
+    # small geofence, and the HOLDs keep the corners readable in a log instead of being
+    # smeared together by accel shaping.
+    pattern:
+      - "MOVE 0.3 0.0 0.0 0.0 3.0"
+      - "HOLD 0.0 0.0 0.0 0.0 1.0"
+      - "TURN 0.0 0.0 0.0 0.5 3.14"
+      - "HOLD 0.0 0.0 0.0 0.0 1.0"
+      - "MOVE 0.3 0.0 0.0 0.0 3.0"
+      - "HOLD 0.0 0.0 0.0 0.0 1.0"
+      - "TURN 0.0 0.0 0.0 0.5 3.14"
+      - "HOLD 0.0 0.0 0.0 0.0 1.0"
+
+    loop_pattern: true
+
+    # 1.0 is honest for a deterministic policy -- nothing about it is uncertain. Lower it to
+    # exercise the downstream low-confidence paths (j10_safety scales its limits by this)
+    # without needing a real model.
+    scripted_confidence: 1.0
+
+    # Sleep this long inside each inference call, standing in for a checkpoint's forward
+    # pass (a real one lands at 80-150 ms). Non-zero is the more honest Phase 4 test: the
+    # cascade exists to absorb a slow producer, so exercising it against an instant one
+    # proves less than it appears to.
+    simulated_inference_latency_sec: 0.0
+
+    # Hold until the mission manager publishes an instruction. Unrequested autonomy is the
+    # failure this prevents -- a policy that flies whenever it happens to be running is one
+    # nobody asked to fly. Only turn this off for a bench run with no mission manager.
+    require_instruction: true

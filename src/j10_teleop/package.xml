@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>j10_teleop</name>
+  <version>0.1.0</version>
+  <description>
+    Joystick override with a deadman button, at the top of the arbitration order. Publishes
+    manual velocity, the deadman state, and the latched E-stop. Releasing the deadman -- or
+    unplugging the controller -- zeroes the command and hands control back, because the
+    command is republished on a fixed timer and goes stale on its own.
+  </description>
+  <maintainer email="info@jnhsystems.com">JNH Systems</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <!-- Supplies /joy. Not a build dependency: the node only consumes sensor_msgs/Joy. -->
+  <exec_depend>joy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

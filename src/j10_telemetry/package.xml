@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>j10_telemetry</name>
+  <version>0.1.0</version>
+  <description>
+    Latency monitoring and dataset capture. latency_monitor_node aggregates per-stage
+    LatencyReport into p50/p95/p99 and judges them against the budget table in
+    docs/ARCHITECTURE.md section 6 -- this is how the 300 ms end-to-end number gets proven
+    rather than assumed. dataset_recorder_node captures synchronized rosbag2 data for VLA
+    fine-tuning and post-flight review.
+  </description>
+  <maintainer email="info@jnhsystems.com">JNH Systems</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>j10_interfaces</depend>
+
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

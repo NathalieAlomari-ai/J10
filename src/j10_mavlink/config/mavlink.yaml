@@ -1,0 +1,163 @@
+# Parameters for the j10_mavlink nodes.
+#
+# The node-name keys below match the container-composed names as well as the standalone
+# executables, since both construct the nodes with their default names.
+
+mavlink_bridge_node:
+  ros__parameters:
+    # --- MAVROS topic and service names ---
+    # Note the doubled "mavros/mavros" on the setpoint topic. That is not a typo: the
+    # setpoint_raw plugin declares its subscription as "~/local", which resolves against
+    # the UAS node's fully-qualified name, and the conventional MAVROS launch names the
+    # node "mavros" inside namespace "mavros". Plugins that use plain relative names
+    # (sys_status) land one level up at /mavros/* instead — hence the mix below.
+    #
+    # Getting the setpoint topic wrong fails SILENTLY: the publisher is created, the topic
+    # shows up in `ros2 topic list`, and the vehicle simply never moves. If the vehicle
+    # arms and takes off but ignores /j10/cmd_vel_safe, check this first with
+    # `ros2 topic info <setpoint_topic>` and confirm it reports a subscriber.
+    setpoint_topic: "/mavros/mavros/local"
+    cmd_vel_topic: "/j10/cmd_vel_safe"
+    vehicle_state_topic: "/j10/vehicle/state"
+    set_mode_service: "/mavros/set_mode"
+    arming_service: "/mavros/cmd/arming"
+    takeoff_service: "/mavros/cmd/takeoff"
+
+    # --- Setpoint stream ---
+    # ArduPilot's guided failsafe trips on setpoint silence, so this stream never stops,
+    # armed or not.
+    setpoint_rate_hz: 30.0
+
+    # How long a /j10/cmd_vel_safe message stays valid. Past this the bridge publishes zero
+    # velocity — hover — rather than repeating the last command. At 30 Hz input, 300 ms is
+    # ~9 missed messages, and it satisfies the Phase 1 exit criterion of returning to hover
+    # within 1 s of the command stopping.
+    command_timeout_sec: 0.3
+
+    # --- Link loss ---
+    # Task A: "Link-loss safety: stop commands on stream drop -> FC failsafe takes over",
+    # KPI "Commands stop <= 1 s after link loss; FC failsafe verified".
+    #
+    # There are two different failures here and they get different answers:
+    #
+    #   Upstream slow, link healthy   -> keep streaming zeros (command_timeout_sec above).
+    #                                    ArduPilot's guided failsafe must NOT trip; nothing
+    #                                    is wrong with the vehicle.
+    #   PC-side chain gone            -> STOP streaming entirely. safety_filter_node
+    #                                    publishes /j10/cmd_vel_safe on a fixed-rate timer
+    #                                    regardless of its own inputs, so silence for this
+    #                                    long means the filter died, the process was killed,
+    #                                    or the link dropped.
+    #
+    # Requires FS_GCS_ENABLE on the flight controller — see src/j10_sim/config/*.parm.
+    # With it disabled there is no failsafe to hand over to and the KPI cannot be shown.
+    link_loss_stop_enabled: true
+    stream_stop_timeout_sec: 1.0
+    # Latching: once the FC has begun its failsafe response, resuming setpoints underneath
+    # it would fight the landing. Recovery is /j10/vehicle/resume_stream, deliberately.
+    stream_stop_latching: true
+
+    # --- Frame convention ---
+    # 'flu' passes the ROS body-FLU twist straight through, which is correct for
+    # mavros_msgs/PositionTarget with FRAME_BODY_NED: the MAVROS setpoint_raw plugin applies
+    # FLU->FRD itself. Set to 'frd' only if a MAVROS change ever removes that transform.
+    body_frame_convention: "flu"
+
+    # --- Last-ditch saturation ---
+    # Defence in depth, NOT a substitute for j10_safety, which remains the only node with
+    # authority to veto. Deliberately wide so it never binds in normal operation; if it does
+    # bind, something upstream of the safety filter is broken and the log will say so.
+    absolute_max_linear_mps: 2.0
+    absolute_max_yaw_rate_rps: 1.5
+
+    # --- Mode, arming, takeoff ---
+    guided_mode: "GUIDED"
+    takeoff_altitude_m: 1.5
+    takeoff_timeout_sec: 30.0
+    # ArduPilot runs its own guided takeoff controller; a velocity setpoint during the climb
+    # overrides it and the vehicle stays on the ground.
+    suppress_setpoints_during_takeoff: true
+    # Hard ceiling on that suppression, independent of takeoff_timeout_sec. A climb that
+    # stalls at half altitude used to buy 30 s of silence — ten times GUID_TIMEOUT, and
+    # indistinguishable from the link having died.
+    max_setpoint_suppression_sec: 3.0
+
+    require_ekf_healthy_to_arm: true
+    # SITL-only escape hatch. Must stay false against a real autopilot.
+    #
+    # Set true here because vehicle_state_node's ekf_healthy is currently a false negative,
+    # not a real health problem: it only ever becomes true after the first message on
+    # /mavros/estimator_status, and that topic never receives one on this ArduPilot build --
+    # neither /mavros/set_stream_rate nor /mavros/set_message_interval got it flowing (both
+    # tried live; the legacy SRx_EXTRA4 parameter that used to control it doesn't even exist
+    # in this ArduPilot version's full 1391-parameter dump). The FC's actual EKF3 is fusing
+    # normally per its own console log ("EKF3 IMU0 fusing optical flow", "tilt alignment
+    # complete", both well before this point). Getting real telemetry-side ekf_healthy
+    # working is tracked as a follow-up; it does not change what Phase 1 needs to prove
+    # (arm -> commanded motion -> hover), so it should not keep blocking that on SITL.
+    allow_force_arm: true
+
+    service_timeout_sec: 5.0
+    state_timeout_sec: 1.0
+
+vehicle_state_node:
+  ros__parameters:
+    # --- MAVROS source topics ---
+    # The split between /mavros/* and /mavros/mavros/* is MAVROS's, not ours — see the
+    # note in the mavlink_bridge_node block above. Subscribing to the wrong name fails
+    # silently: the field just stays at its default forever while staleness_sec looks
+    # healthy (because another source is fresh). If pose/velocity stay zero with a zero
+    # timestamp, verify with `ros2 topic info <topic>` that a *publisher* exists — a
+    # topic listed by `ros2 topic list` may only have our subscriber on it.
+    state_topic: "/mavros/state"
+    pose_topic: "/mavros/mavros/pose"
+    velocity_topic: "/mavros/mavros/velocity_local"
+    battery_topic: "/mavros/battery"
+    rangefinder_topic: "/mavros/mavros/rangefinder"
+    estimator_status_topic: "/mavros/estimator_status"
+    # Not published while px4flow is out of the plugin allowlist; harmless, flow_valid
+    # simply stays false. See src/j10_sim/config/mavros_apm.yaml.
+    flow_topic: "/mavros/px4flow/raw/optical_flow_rad"
+
+    publish_rate_hz: 20.0
+    frame_id: "map"
+
+    # 0.5 was too tight against a live SITL run: ArduPilot's default LOCAL_POSITION_NED
+    # stream rate to a fresh MAVLink endpoint hovers around 2 Hz with jitter, producing
+    # gaps of 0.50-0.55 s -- right at the 0.5 s line, so the warning below fired almost
+    # every cycle even though data was arriving normally. 1.0 s gives real margin without
+    # meaningfully weakening the watchdog (a genuinely dead link is still caught well
+    # inside a second).
+    pose_timeout_sec: 1.0
+    rangefinder_timeout_sec: 0.5
+    flow_timeout_sec: 0.5
+    estimator_timeout_sec: 2.0
+
+    # MTF-01 single-point LiDAR band. Readings outside it are reported invalid rather than
+    # passed on as a number that looks usable.
+    rangefinder_min_range_m: 0.05
+    rangefinder_max_range_m: 8.0
+
+    flow_quality_threshold: 0.2
+
+    # Indoors there is no GPS, so absolute horizontal position is never solved. Requiring it
+    # would pin ekf_healthy to false and block arming forever.
+    require_pos_horiz_abs: false
+
+    # Derive ekf_healthy from a fresh, finite local position when the flight controller
+    # never sends ESTIMATOR_STATUS at all.
+    #
+    # TRUE here because this ArduCopter build (V4.8.0-dev) does not: /mavros/estimator_status
+    # receives nothing, MAVROS never requests the message, and every runtime way of asking
+    # for it fails on that build. Left false, ekf_healthy is a permanent *false negative* --
+    # it reports nothing about the EKF, only that we cannot hear it -- and j10_safety then
+    # correctly zeroes every command, which takes the whole autonomy chain down for want of
+    # a telemetry stream.
+    #
+    # The inference is evidence-based, not a bypass: ArduPilot derives LOCAL_POSITION_NED
+    # from the EKF solution, so a pose arriving on time with finite numbers means the EKF is
+    # producing what the flag would have asserted. What it cannot recover is the detail --
+    # accelerometer error flags and the per-axis status bits stay invisible. Set back to
+    # false on any autopilot that reports ESTIMATOR_STATUS properly; a flag the FC actually
+    # sends is always the better evidence.
+    allow_derived_ekf_health: true

@@ -13,6 +13,8 @@ install(
 install(
   PROGRAMS
     scripts/run_sitl.sh
+    scripts/latency_probe.py
+    scripts/link_loss_test.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

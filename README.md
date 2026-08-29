@@ -88,7 +88,7 @@ Two things that will bite you once each, both environment rather than code:
 | `j10_interfaces` | The message contract everything keys off | — |
 | `j10_mavlink` | Sole owner of the FC interface; 30 Hz setpoint stream | 11 |
 | `j10_sim` | Gazebo world, ArduPilot SITL, indoor parameter set | — |
-| `j10_safety` | The independent guardian — the only node that may veto | 39 |
+| `j10_safety` | The independent guardian — the only node that may veto | 56 |
 | `j10_control` | Intent → smooth 30 Hz command, decays to hover | 23 |
 | `j10_video` | RTP receiver; capture-time stamping, link health | 40 |
 | `j10_telemetry` | Latency percentiles vs. the budget; dataset capture | 41 |
@@ -96,10 +96,17 @@ Two things that will bite you once each, both environment rather than code:
 | `j10_mission` | State machine; owns the autonomy permission | 81 |
 | `j10_teleop` | Joystick, deadman, E-stop — top of the arbitration order | 42 |
 
-**354 unit tests, no simulator and no ROS required to run them, milliseconds end to end.**
+**371 unit tests, no simulator and no ROS required to run them, milliseconds end to end.**
 That is possible because each package keeps its real logic in a pure core with the ROS
 wrapper kept thin — the safety envelope, the state machine, the RTP clock and the
 percentile maths are all plain C++ or Python.
+
+This branch reconciles two lines of development that had diverged after `j10_safety` first
+landed: the build-out of the remaining packages above, and a set of `j10_mavlink`/`j10_safety`
+hardening changes made in parallel — the bridge now stops streaming setpoints on link loss
+instead of forever, the safety filter gained a braking-distance envelope and a deadman
+watchdog, GPS-denied arming no longer needs the workaround it used to, and the command-leg
+latency is measured rather than assumed. Both sets of changes are folded in together here.
 
 Phases 3–7 remain: they are bring-up and measurement against real hardware, not new
 packages.

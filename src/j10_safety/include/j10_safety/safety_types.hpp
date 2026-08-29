@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,20 @@ struct Limits
   /// Distance from the boundary at which the outward component starts scaling to zero.
   double altitude_margin_m{0.3};
 
+  // --- Envelope barrier ---
+  /// Deceleration available for stopping the vehicle at a boundary, m/s^2.
+  ///
+  /// This is what the FLIGHT CONTROLLER can actually achieve, not what this filter
+  /// rate-limits commands to. The filter can only stop *asking* for outward motion; the
+  /// vehicle is brought to a halt by the guided velocity controller, so the number that
+  /// governs how much room a stop needs is the autopilot's, and it is deliberately
+  /// conservative here.
+  double brake_accel_mps2{1.0};
+  /// Round-trip control latency, seconds. The vehicle keeps moving for roughly this long
+  /// at its present velocity before any new command takes effect, so this much travel is
+  /// reserved out of the distance to every boundary. Matches the 300 ms end-to-end budget.
+  double control_latency_sec{0.3};
+
   // --- Virtual geofence, an axis-aligned box in the ENU local frame ---
   bool geofence_enabled{true};
   double geofence_min_x{-2.0};
@@ -99,6 +114,13 @@ struct Limits
   /// When true, loss of video revokes autonomy (the VLA is blind without frames).
   /// Manual teleop is unaffected -- a human on the sticks does not need the video link.
   bool video_loss_stops_autonomy{true};
+
+  // --- Offboard authority ---
+  /// When true, an armed vehicle that is not in `guided_mode` cannot be commanded: the
+  /// flight controller has stopped acting on our setpoints, so continuing to compute them
+  /// as though it were is a fiction. Empty `guided_mode` checks only the boolean flag.
+  bool require_guided{true};
+  std::string guided_mode{"GUIDED"};
 };
 
 /// Everything the filter needs to know about the vehicle, flattened out of VehicleState.
@@ -111,6 +133,9 @@ struct VehicleSnapshot
   double x{0.0};
   double y{0.0};
   double z{0.0};
+  // Measured velocity, ENU. The envelope barrier reads these: a boundary check that looks
+  // only at the commanded velocity ignores the momentum the vehicle already carries, and
+  // stops asking for outward motion at exactly the moment it can no longer help.
   double vx{0.0};
   double vy{0.0};
   double vz{0.0};
@@ -121,6 +146,10 @@ struct VehicleSnapshot
 
   bool ekf_healthy{false};
   bool armed{false};
+  /// Flight controller is in a mode that acts on offboard setpoints.
+  bool guided{false};
+  /// Raw flight-controller mode string, e.g. "GUIDED", "LOITER", "LAND".
+  std::string mode;
 
   /// 0.0-1.0, or negative when unknown. Unknown is NOT treated as empty.
   double battery_fraction{-1.0};
@@ -138,7 +167,15 @@ struct FilterInputs
   geometry_msgs::msg::Twist manual;
   bool manual_valid{false};
   double manual_age_sec{0.0};
+  /// Deadman state, and how old that state is. A held deadman with no further messages is
+  /// not a held deadman -- it is a dead publisher, and treating it as held latches the
+  /// vehicle into the manual branch with no way out.
   bool deadman_held{false};
+  double deadman_age_sec{0.0};
+  /// Defaults true: a caller that supplies `deadman_held` without freshness information is
+  /// taken at its word, which keeps a held deadman meaning manual control. The node always
+  /// supplies both, so in the running system this is never the default.
+  bool deadman_valid{true};
 
   // --- Latches and gates ---
   bool estop_engaged{false};      ///< rising edge latches; clears only via reset()
@@ -235,6 +272,76 @@ inline double limitAgainstBounds(
   return velocity;
 }
 
+/// Braking-distance form of `limitAgainstBounds`, and the one the envelope actually uses.
+///
+/// `limitAgainstBounds` scales the *commanded* velocity to zero across the margin. That is
+/// not a containment guarantee: the vehicle's real velocity is not the commanded one, the
+/// autopilot tracks the command with its own lag, and the whole loop carries roughly
+/// `latency_sec` of delay. A command that reaches zero exactly at the boundary belongs to a
+/// vehicle that is still moving outward.
+///
+/// This is the discrete form of the control-barrier condition. With `d` the distance to the
+/// boundary, the outward command is capped so that the remaining room is enough to stop:
+///
+///     d_usable = d - v_measured_outward * latency_sec       (travel during the delay)
+///     v_max    = sqrt(2 * brake_accel * max(0, d_usable))   (braking distance)
+///
+/// It never *raises* the allowed velocity: the heuristic margin scaling is applied first and
+/// acts as a ceiling, so an envelope tuned against the old behaviour cannot loosen.
+///
+/// @note This bounds the command; it does not command a correction. If the vehicle is
+///       already drifting outward faster than `v_max`, the filter returns zero and the
+///       autopilot's own velocity controller does the stopping. Actively pushing back
+///       inward is a controller's job, not a veto layer's, which is why `brake_accel`
+///       should be set to what the FLIGHT CONTROLLER can achieve.
+inline double limitAgainstBoundsBraking(
+  double position, double lower, double upper, double margin,
+  double velocity, double measured_velocity,
+  double brake_accel, double latency_sec)
+{
+  // Never looser than the margin rule.
+  const double allowed = limitAgainstBounds(position, lower, upper, margin, velocity);
+  if (allowed == 0.0 || brake_accel <= 0.0) {
+    return allowed;
+  }
+
+  const bool outward_positive = allowed > 0.0;
+  const double distance = outward_positive ? (upper - position) : (position - lower);
+  if (distance <= 0.0) {
+    return 0.0;
+  }
+
+  // Only outward measured motion eats into the room available. Drifting inward does not
+  // earn extra outward budget, hence the max() rather than a signed term.
+  const double measured_outward = outward_positive ? measured_velocity : -measured_velocity;
+  const double reserved = std::max(0.0, measured_outward) * std::max(0.0, latency_sec);
+  const double usable = distance - reserved;
+  if (usable <= 0.0) {
+    return 0.0;
+  }
+
+  const double v_max = std::sqrt(2.0 * brake_accel * usable);
+  if (std::abs(allowed) <= v_max) {
+    return allowed;
+  }
+  return std::copysign(v_max, allowed);
+}
+
+/// The smallest margin that can hold `max_speed` inside a boundary, given the braking
+/// authority and the loop delay. Configuring a margin below this means the envelope cannot
+/// be enforced at the configured speed, so the node refuses to start rather than flying an
+/// envelope it cannot keep.
+inline double requiredMargin(double max_speed, double brake_accel, double latency_sec)
+{
+  if (max_speed <= 0.0) {
+    return 0.0;
+  }
+  const double braking = (brake_accel > 0.0) ?
+    (max_speed * max_speed) / (2.0 * brake_accel) :
+    std::numeric_limits<double>::infinity();
+  return braking + max_speed * std::max(0.0, latency_sec);
+}
+
 /// Rotate a body-FLU horizontal velocity into the ENU local frame.
 inline void bodyToEnu(double vx_body, double vy_body, double yaw, double & vx, double & vy)
 {
@@ -285,8 +392,12 @@ inline bool clampScalar(double & value, double limit)
 inline bool rateLimit(double & current, double target, double accel, double decel, double dt)
 {
   if (dt <= 0.0) {
-    current = target;
-    return false;
+    // A non-positive dt means the clock went backwards, the executor stalled, or this is
+    // the very first cycle. Previously this assigned the target outright AND reported that
+    // nothing bound -- the acceleration limiter silently disabled itself at exactly the
+    // moment the timing was untrustworthy. Hold instead, and say that it bound, so the
+    // condition is visible in active_limits rather than invisible in the command.
+    return true;
   }
   const double delta = target - current;
   // Moving toward zero (or reversing) is deceleration; away from zero is acceleration.
@@ -298,6 +409,34 @@ inline bool rateLimit(double & current, double target, double accel, double dece
     return false;
   }
   current += std::copysign(budget, delta);
+  return true;
+}
+
+/// Rate-limit a horizontal velocity toward its target as a 2-VECTOR.
+///
+/// Limiting x and y independently lets a 45-degree command accelerate at sqrt(2) times the
+/// configured limit, for the same reason `clampHorizontal` scales speed as a vector rather
+/// than per axis. Reduces exactly to `rateLimit` on a single axis.
+inline bool rateLimitHorizontal(
+  double & cx, double & cy, double tx, double ty, double accel, double decel, double dt)
+{
+  if (dt <= 0.0) {
+    return true;   // hold; see the note in rateLimit
+  }
+  const double dx = tx - cx;
+  const double dy = ty - cy;
+  const double delta = std::hypot(dx, dy);
+  // Shrinking the speed is deceleration, whatever the direction change.
+  const bool decelerating = std::hypot(tx, ty) < std::hypot(cx, cy);
+  const double budget = (decelerating ? decel : accel) * dt;
+  if (budget <= 0.0 || delta <= budget) {
+    cx = tx;
+    cy = ty;
+    return false;
+  }
+  const double scale = budget / delta;
+  cx += dx * scale;
+  cy += dy * scale;
   return true;
 }
 

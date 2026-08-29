@@ -2,6 +2,9 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace j10_safety
@@ -65,6 +68,7 @@ SafetyFilterNode::SafetyFilterNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("safety_filter_node", options),
   autonomous_time_(0, 0, RCL_ROS_TIME),
   manual_time_(0, 0, RCL_ROS_TIME),
+  deadman_time_(0, 0, RCL_ROS_TIME),
   vehicle_time_(0, 0, RCL_ROS_TIME),
   stream_time_(0, 0, RCL_ROS_TIME),
   last_step_(0, 0, RCL_ROS_TIME)
@@ -76,7 +80,9 @@ SafetyFilterNode::SafetyFilterNode(const rclcpp::NodeOptions & options)
   // restart mid-flight cannot silently re-authorise the model.
   autonomy_enabled_ = declare_parameter("autonomy_enabled_on_start", false);
 
-  filter_.setLimits(loadLimits());
+  const auto limits = loadLimits();
+  assertEnvelopeIsEnforceable(limits);
+  filter_.setLimits(limits);
 
   const auto realtime_qos = rclcpp::QoS(1).best_effort();
   const auto latched_qos = rclcpp::QoS(1).reliable().transient_local();
@@ -154,6 +160,9 @@ Limits SafetyFilterNode::loadLimits()
   l.geofence_max_y = declare_parameter("geofence_max_y", l.geofence_max_y);
   l.geofence_margin_m = declare_parameter("geofence_margin_m", l.geofence_margin_m);
 
+  l.brake_accel_mps2 = declare_parameter("brake_accel_mps2", l.brake_accel_mps2);
+  l.control_latency_sec = declare_parameter("control_latency_sec", l.control_latency_sec);
+
   l.proximity_stop_m = declare_parameter("proximity_stop_m", l.proximity_stop_m);
   l.proximity_slow_m = declare_parameter("proximity_slow_m", l.proximity_slow_m);
 
@@ -166,7 +175,54 @@ Limits SafetyFilterNode::loadLimits()
   l.video_timeout_sec = declare_parameter("video_timeout_sec", l.video_timeout_sec);
   l.video_loss_stops_autonomy =
     declare_parameter("video_loss_stops_autonomy", l.video_loss_stops_autonomy);
+
+  l.require_guided = declare_parameter("require_guided", l.require_guided);
+  l.guided_mode = declare_parameter("guided_mode", l.guided_mode);
   return l;
+}
+
+void SafetyFilterNode::assertEnvelopeIsEnforceable(const Limits & l) const
+{
+  // An envelope is only a guarantee if the margins are wide enough to stop inside, given
+  // the braking authority and the loop delay. Getting this wrong is silent -- the vehicle
+  // flies fine right up until someone raises a speed limit and the fence quietly stops
+  // being a fence -- so it is checked once, loudly, at startup.
+  std::string problem;
+
+  const auto require = [&problem](
+    const char * what, double margin, double speed, double brake, double latency) {
+      const double needed = requiredMargin(speed, brake, latency);
+      if (margin + 1e-9 < needed) {
+        char buf[320];
+        std::snprintf(
+          buf, sizeof buf,
+          "%s margin is %.3f m but %.3f m is needed to stop from %.2f m/s at %.2f m/s^2 "
+          "with %.0f ms of loop delay; ",
+          what, margin, needed, speed, brake, latency * 1e3);
+        problem += buf;
+      }
+    };
+
+  if (l.geofence_enabled) {
+    require(
+      "geofence", l.geofence_margin_m, l.max_horizontal_mps,
+      l.brake_accel_mps2, l.control_latency_sec);
+  }
+  require(
+    "altitude", l.altitude_margin_m, l.max_vertical_mps,
+    l.brake_accel_mps2, l.control_latency_sec);
+
+  if (problem.empty()) {
+    return;
+  }
+
+  const std::string message =
+    "refusing to start: the configured envelope cannot be enforced. " + problem +
+    "Either widen the margin, lower the speed limit, or raise brake_accel_mps2 to what "
+    "the flight controller can actually achieve — but do not raise it to make this "
+    "message go away.";
+  RCLCPP_FATAL(get_logger(), "%s", message.c_str());
+  throw std::runtime_error(message);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -202,6 +258,8 @@ void SafetyFilterNode::onDeadman(const std_msgs::msg::Bool::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   deadman_held_ = msg->data;
+  deadman_time_ = now();
+  deadman_received_ = true;
 }
 
 void SafetyFilterNode::onAutonomyEnabled(const std_msgs::msg::Bool::SharedPtr msg)
@@ -257,6 +315,7 @@ void SafetyFilterNode::onTimer()
   const rclcpp::Time stamp = now();
 
   FilterInputs in;
+  bool deadman_released = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -270,6 +329,8 @@ void SafetyFilterNode::onTimer()
     in.manual_age_sec = manual_received_ ? (stamp - manual_time_).seconds() : 0.0;
 
     in.deadman_held = deadman_held_;
+    in.deadman_valid = deadman_received_;
+    in.deadman_age_sec = deadman_received_ ? (stamp - deadman_time_).seconds() : 0.0;
     in.estop_engaged = estop_engaged_;
     in.autonomy_enabled = autonomy_enabled_;
 
@@ -297,8 +358,27 @@ void SafetyFilterNode::onTimer()
       v.rangefinder_range = s.rangefinder_range;
       v.ekf_healthy = s.ekf_healthy;
       v.armed = s.armed;
+      v.guided = s.guided;
+      v.mode = s.mode;
       v.battery_fraction = s.battery_percentage;
     }
+
+    // Release a deadman we can no longer confirm. The filter has already seen the held
+    // state for this cycle and braked on it, which makes the transition visible; from the
+    // next cycle the ladder proceeds normally instead of latching on a dead publisher.
+    if (deadman_held_ && deadman_received_ &&
+      (stamp - deadman_time_).seconds() > filter_.limits().command_timeout_sec)
+    {
+      deadman_held_ = false;
+      deadman_released = true;
+    }
+  }
+
+  if (deadman_released) {
+    RCLCPP_WARN(
+      get_logger(),
+      "/j10/teleop/deadman went silent while held — treating the deadman as released. "
+      "Is j10_teleop still running?");
   }
 
   double dt = 1.0 / ((rate_hz_ > 0.0) ? rate_hz_ : 30.0);

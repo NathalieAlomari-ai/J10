@@ -18,9 +18,10 @@ int main(int argc, char ** argv)
   rclcpp::NodeOptions options;
   auto node = std::make_shared<j10_mavlink::MavlinkBridgeNode>(options);
 
-  // Four threads: setpoint timer, subscriptions, service servers, service clients — one per
-  // mutually-exclusive callback group.
-  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+  // Five threads, one per mutually-exclusive callback group: setpoint timer,
+  // subscriptions, service servers, takeoff, service clients. Takeoff has its own group
+  // because it blocks for the duration of the climb and must not hold up disarm.
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 5);
   executor.add_node(node);
   executor.spin();
 

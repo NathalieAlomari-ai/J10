@@ -95,6 +95,9 @@ private:
   double flow_quality_threshold_;
   bool require_pos_horiz_abs_;
   bool allow_derived_ekf_health_;
+  /// Kept so the "no ESTIMATOR_STATUS ever arrived" warning can name the topic it is
+  /// waiting on — the usual cause is a topic name with no publisher behind it.
+  std::string estimator_status_topic_;
 };
 
 }  // namespace j10_mavlink

@@ -1,0 +1,95 @@
+# ArduCopter SITL — GPS-denied indoor flight on a SIMULATED EXTERNAL NAV source.
+#
+# This is the fast path to a working arm+hover. ArduPilot SITL can synthesise the
+# external-nav MAVLink stream from its own ground truth (the "vicon" simulated device), so
+# no Gazebo->ROS pose bridge, no extra node, and no MAVROS vision plugin are needed. That
+# matters: the MAVROS vision_pose plugin declares "~/pose", which on this build resolves to
+# the same name local_position already publishes (see src/j10_sim/README.md on the sub-node
+# quirk) — enabling it risks feeding the EKF's own output straight back into it.
+#
+# Load with:  run_sitl.sh --extnav
+# which adds the simulated device on SERIAL5 as well as selecting this file.
+#
+# The optical-flow path lives in sitl_indoor.parm and stays the hardware-faithful target;
+# this file exists so Phase 1 can be closed while that is debugged separately.
+
+# --- EKF3 on, GPS off --------------------------------------------------------------------
+AHRS_EKF_TYPE   3
+EK3_ENABLE      1
+# GPS_TYPE was renamed GPS1_TYPE in ArduPilot 4.5. An unknown name is warned about and then
+# ignored, which would leave GPS quietly ACTIVE and the vehicle not GPS-denied at all, so
+# both are set. Confirm with `param show GPS*` after load rather than trusting this file.
+GPS_TYPE        0
+GPS1_TYPE       0
+
+# --- Simulated external nav device -------------------------------------------------------
+# sim_vehicle.py attaches it with --serial5=sim:vicon: (older trees: --uartF=sim:vicon:).
+SERIAL5_PROTOCOL 2
+SERIAL5_BAUD     921
+# Which MAVLink messages the simulated device emits. Bit 0 is VISION_POSITION_ESTIMATE,
+# which is all this source set needs.
+#   VERIFY: the SIM_VICON_TMASK bit layout has moved between releases. If the EKF never
+#   picks the source up, `param show SIM_VICON*` and read the TMASK description from the
+#   running binary rather than assuming this value.
+SIM_VICON_TMASK 1
+
+# AP_VisualOdom must be enabled or VISION_POSITION_ESTIMATE is parsed and then dropped.
+#   VERIFY: 1 == MAVLink on current releases. This is the single most likely value to have
+#   moved; a wrong one fails SILENTLY (no error, EKF simply never fuses).
+VISO_TYPE       1
+
+# --- Source set 1: horizontal from external nav, vertical from baro ----------------------
+EK3_SRC1_POSXY  6
+# Deliberately 0, not 6. VISION_POSITION_ESTIMATE carries position only; selecting
+# ExternalNav velocity without a VISION_SPEED_ESTIMATE stream would leave the EKF with no
+# velocity source at all, velocity_horiz would never go true, and arming would stay blocked
+# for a completely different reason than the one being fixed here.
+EK3_SRC1_VELXY  0
+# Baro, not RangeFinder. Optical flow needs the rangefinder for scaling either way, but
+# making it the primary height source as well couples two failure modes and is fragile over
+# a non-flat floor. Baro in SITL is exact and free.
+EK3_SRC1_POSZ   1
+EK3_SRC1_VELZ   0
+# Compass. SITL's compass is clean, so this is the low-risk choice for closing Phase 1.
+# Set to 6 (ExternalNav) for the compass-off case Task B requires — that needs the
+# simulated device to emit attitude, so raise SIM_VICON_TMASK accordingly.
+EK3_SRC1_YAW    1
+
+# --- Arming ------------------------------------------------------------------------------
+# Checks stay ON. This path is supposed to pass them honestly; if it cannot, the PreArm
+# message is the diagnostic and switching to ARMING_CHECK 0 only hides it.
+ARMING_CHECK    1
+BRD_SAFETYENABLE 0
+
+# --- Failsafes ---------------------------------------------------------------------------
+# No RC transmitter is attached to SITL, so the throttle failsafe would block every test.
+FS_THR_ENABLE   0
+
+# The GCS failsafe is ENABLED, and that is a requirement rather than a preference: task A
+# specifies "stop commands on stream drop -> FC failsafe takes over" with the KPI
+# "Commands stop <= 1 s after link loss; FC failsafe verified". With FS_GCS_ENABLE 0 that
+# KPI cannot be demonstrated at all, because there is no failsafe to take over.
+#
+# 1 = LAND. Not RTL: there is no GPS indoors and RTL without a home position is not a
+# recovery, it is a second failure.
+#   VERIFY: the FS_GCS_ENABLE option numbering differs between Copter releases. Confirm the
+#   value that means LAND on this build before trusting the failsafe to do the right thing.
+FS_GCS_ENABLE   1
+# Seconds of MAVLink silence before the failsafe triggers. The KPI budget is 1 s for the PC
+# to stop commanding; this is the FC's half of that contract.
+FS_GCS_TIMEOUT  1
+
+# --- Guided ------------------------------------------------------------------------------
+# Seconds without a setpoint before ArduPilot's guided controller stops the vehicle. The
+# bridge streams at 30 Hz so this never trips during normal flight; it is the first thing
+# that acts when the bridge deliberately stops streaming.
+GUID_TIMEOUT    3
+
+# --- Conservative indoor envelope --------------------------------------------------------
+# The FC's backstop. j10_safety enforces its own, tighter limits independently.
+PILOT_SPEED_UP  100
+PILOT_SPEED_DN  100
+WPNAV_SPEED     150
+WPNAV_SPEED_UP  100
+WPNAV_SPEED_DN  100
+ANGLE_MAX       1500

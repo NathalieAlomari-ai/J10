@@ -155,7 +155,7 @@ class CVCommandReader:
             seq1 = _SEQ_STRUCT.unpack_from(buf, _SEQ_OFFSET)[0]
             if seq1 % 2 == 1:
                 continue  # writer mid-update
-            magic, seq_check, ts_ns, vx, vy, vz, yaw_rate, valid = _STRUCT.unpack_from(buf, 0)
+            magic, _seq, ts_ns, vx, vy, vz, yaw_rate, valid = _STRUCT.unpack_from(buf, 0)
             seq2 = _SEQ_STRUCT.unpack_from(buf, _SEQ_OFFSET)[0]
             if seq1 != seq2:
                 continue  # writer started a new update mid-read

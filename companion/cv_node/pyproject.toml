@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "j10-cv-node"
+version = "0.1.0"
+description = "J10 PT1 companion-computer microservice: lightweight, non-ML grid-based obstacle avoidance (Pi Camera Module 3) writing velocity commands to the j10_shm_protocol shared-memory adapter."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "j10-shm-protocol",
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
+]
+# picamera2 is intentionally NOT listed here — see README "Installing on the Pi". It's a
+# system package (apt install python3-picamera2) tied to libcamera, not something pip can
+# reliably build on a Pi Zero 2W, and this project must stay importable/testable on a dev
+# machine or in CI where picamera2 isn't installed at all (see cv_node/camera.py's lazy
+# import of it).
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+j10-cv-node = "cv_node.__main__:main"
+
+[tool.setuptools]
+packages = ["cv_node"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Same pitfall as companion/pyproject.toml, different name: don't add `pythonpath = ["."]`
+# here. Run the `pytest` command (or `j10-cv-node`), not `python -m pytest`/`python -m
+# cv_node`, from this directory — see ../README.md "Running it".

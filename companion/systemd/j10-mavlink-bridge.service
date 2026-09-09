@@ -1,0 +1,37 @@
+[Unit]
+Description=J10 PT1 MAVLink bridge (CV shared-memory velocity commands -> CUAV V7 Nano)
+# Runs independently of the CV node by design (microservice pattern): it must come up and
+# fail safe to hover even if the CV node's own unit hasn't started yet.
+After=network.target
+Wants=j10-cv-node.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/J10/companion
+# The console script, not `python3 -m mavlink_bridge`: with WorkingDirectory set to
+# companion/, `-m` would prepend that directory to sys.path, and companion/j10_shm_protocol/
+# (that package's project root, not the package itself) would shadow the real,
+# pip-installed j10_shm_protocol as an empty namespace package — the bridge would fail to
+# start on every boot. See the README "Running it" note and the pyproject.toml
+# [tool.pytest.ini_options] comment for the full mechanics. Path assumes the venv from the
+# README's "Running it" section was created at companion/.venv.
+ExecStart=/home/pi/J10/companion/.venv/bin/j10-mavlink-bridge
+Restart=on-failure
+RestartSec=2
+
+# Companion-computer control loop: keep it responsive under Pi Zero 2W CPU contention
+# (e.g. from the camera/CV process sharing the same quad-core SoC).
+Nice=-5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=2
+
+Environment=J10_BRIDGE_SERIAL_PORT=/dev/serial0
+Environment=J10_BRIDGE_BAUD=921600
+Environment=J10_BRIDGE_SETPOINT_RATE_HZ=20
+Environment=J10_BRIDGE_LOG_LEVEL=INFO
+# Uncomment only once bench-verified: keeps this bridge from ever touching flight mode.
+# Environment=J10_BRIDGE_AUTO_REQUEST_GUIDED_MODE=false
+
+[Install]
+WantedBy=multi-user.target

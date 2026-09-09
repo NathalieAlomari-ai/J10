@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "j10-mavlink-bridge"
+version = "0.1.0"
+description = "J10 PT1 companion-computer microservice: Serial/UART MAVLink bridge from a shared-memory CV velocity adapter to the CUAV V7 Nano flight controller."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "j10-shm-protocol",
+    "pymavlink>=2.4.37",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+j10-mavlink-bridge = "mavlink_bridge.__main__:main"
+j10-cv-stub = "mavlink_bridge.cv_stub:main"
+
+[tool.setuptools]
+packages = ["mavlink_bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# No `pythonpath = ["."]` here on purpose, and don't add it back: this directory
+# (companion/) also contains j10_shm_protocol/ (that package's project root, not the
+# package itself — no __init__.py at that level). Putting "." on sys.path lets that
+# directory shadow the real, pip-installed j10_shm_protocol as an empty namespace package.
+# The same shadowing happens with plain `python -m <anything>` run from this directory —
+# `-m` always prepends the current directory to sys.path, same as this setting would.
+# Both packages must be pip-installed (`pip install -e`) before running tests either way —
+# use the `pytest` command (or the `j10-mavlink-bridge` / `j10-cv-stub` console scripts,
+# or `python -m ...` from a directory that isn't this one) — see README "Running it".

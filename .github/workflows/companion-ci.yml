@@ -1,0 +1,38 @@
+name: Companion CI
+
+on:
+  push:
+    branches: ['**']
+    paths: ['companion/**', '.github/workflows/companion-ci.yml']
+  pull_request:
+    branches: [main]
+    paths: ['companion/**', '.github/workflows/companion-ci.yml']
+
+jobs:
+  test:
+    name: pytest (j10_shm_protocol + mavlink_bridge + cv_node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: companion
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install j10_shm_protocol (both other packages depend on it; not on PyPI)
+        run: pip install -e "./j10_shm_protocol[dev]"
+
+      - name: Install mavlink_bridge + dev dependencies
+        run: pip install -e ".[dev]"
+
+      # opencv-python-headless/numpy have real PyPI wheels on the CI runner's platform —
+      # the apt/--system-site-packages route in cv_node/README.md is a Pi Zero 2W-specific
+      # workaround, not needed here.
+      - name: Install cv_node + dev dependencies
+        run: pip install -e "./cv_node[dev]"
+
+      - name: Run tests
+        run: pytest -v j10_shm_protocol/tests tests cv_node/tests

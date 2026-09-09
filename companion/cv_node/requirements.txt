@@ -1,0 +1,8 @@
+# For a plain `pip install -r requirements.txt` deploy. On the Pi itself, prefer the apt
+# route in README.md "Installing on the Pi" instead — opencv-python-headless/numpy wheels
+# are a slow, RAM-heavy build on a Pi Zero 2W's 512MB, and picamera2 isn't pip-installable
+# at all. This file is for a dev machine (bench-testing with the "opencv" camera backend)
+# or CI, where a normal `pip install` just works.
+-e ../j10_shm_protocol
+opencv-python-headless>=4.8
+numpy>=1.24

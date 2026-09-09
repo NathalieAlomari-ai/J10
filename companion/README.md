@@ -1,14 +1,18 @@
-# J10 PT1 — MAVLink Bridge (Pi Zero 2W ⇄ CUAV V7 Nano)
+# J10 PT1 — Onboard CV Bridge (Pi Zero 2W ⇄ CUAV V7 Nano)
 
-Standalone companion-computer microservice. It owns the **Serial/UART link to the flight
-controller** and nothing else: no perception, no planning, no vision. It receives
-`(vx, vy, vz, yaw_rate)` from an independent CV process over a shared-memory adapter and
-streams it to the FC as MAVLink velocity setpoints, at a fixed rate, forever — falling back
-to zero-velocity hover the instant that input goes missing, stale, or invalid.
+The onboard PT1 track: Pi Camera Module 3 → grid-based obstacle avoidance → Serial UART →
+CUAV V7 Nano. CV-driven, no VLA, no ground-station PC in the loop. Three packages, each
+with exactly one job, talking through one shared-memory contract:
 
-This is the onboard PT1 track: Pi Zero 2W → Serial UART → CUAV V7 Nano, CV-driven, no VLA,
-no ground-station PC in the loop. It intentionally does **not** live under `src/` — that
-ROS 2 workspace is the separate PC-side offboard-control architecture described in
+- **`cv_node/`** — camera in, `(vx, vy, vz, yaw_rate)` out. No MAVLink, no Serial.
+- **`j10_shm_protocol/`** — the wire contract between them. No dependency in either
+  direction — see "Shared-memory adapter" below for why that split exists.
+- **`mavlink_bridge/`** — `(vx, vy, vz, yaw_rate)` in, MAVLink setpoints out over Serial.
+  No perception, no planning. Fails to zero-velocity hover the instant its input goes
+  missing, stale, or invalid.
+
+This intentionally does **not** live under `src/` — that ROS 2 workspace is the separate
+PC-side offboard-control architecture described in
 [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md), which already carves out "the Pi-side
 streaming service" as explicitly out of its scope. `companion/` is where Pi-side, non-ROS
 software lives.
@@ -16,13 +20,13 @@ software lives.
 ```
 ┌─────────────────────────────── Raspberry Pi Zero 2W ───────────────────────────────┐
 │                                                                                      │
-│   cv_node (separate package, not yet written)                                      │
-│       │ writes (vx, vy, vz, yaw_rate) @ its own rate, via j10_shm_protocol         │
+│   cv_node: Pi Camera Module 3 -> grid-based obstacle avoidance                     │
+│       │ writes (vx, vy, vz, yaw_rate) @ ~8 Hz, via j10_shm_protocol                │
 │       ▼                                                                            │
 │   /dev/shm/j10_cv_cmd  ◄── j10_shm_protocol: seqlock, 36 bytes, stdlib-only ──►    │
 │       ▲                                                                            │
 │       │ reads latest command every setpoint tick, via j10_shm_protocol            │
-│   mavlink_bridge (this package)                                                   │
+│   mavlink_bridge                                                                   │
 │       │ SET_POSITION_TARGET_LOCAL_NED @ 20 Hz (zeros on any failsafe)             │
 │       ▼                                                                            │
 │   /dev/serial0 (UART) ──────────────────────────────────────────┐                  │
@@ -30,9 +34,6 @@ software lives.
                                                                     ▼
                                                        CUAV V7 Nano (ArduPilot)
 ```
-
-`j10_shm_protocol` is its own installable package ([`j10_shm_protocol/`](j10_shm_protocol/)),
-not part of `mavlink_bridge` — see "Shared-memory adapter" below for why.
 
 ## Why Python, not C++
 
@@ -43,8 +44,8 @@ tooling) already generates the message pack/unpack code in C via `pymavlink`'s
 mavgen-generated `MAVLink_message` classes, so the "hot path" isn't actually pure-Python
 overhead. C++ would buy negligible latency here and cost real development time versus a
 project whose critical unknowns (CV inference, EKF3 tuning, indoor navigation) are
-elsewhere. Reassess if profiling ever shows this loop is the bottleneck — it won't be before
-the CV node is.
+elsewhere. Reassess if profiling ever shows this loop is the bottleneck — `cv_node`'s Canny
++ blur pass is the far more likely place to find one first.
 
 ## Layout
 
@@ -54,19 +55,30 @@ companion/
 │   ├── pyproject.toml                    # installable as `j10-shm-protocol`
 │   ├── j10_shm_protocol/__init__.py      # CVCommand, CVCommandReader, CVCommandWriter
 │   └── tests/                            # pytest, no hardware required
-├── mavlink_bridge/                       # depends on j10_shm_protocol, not the other way
+├── cv_node/                              # depends on j10_shm_protocol
+│   ├── pyproject.toml                    # installable as `j10-cv-node`
+│   ├── cv_node/
+│   │   ├── obstacle_avoidance.py         # the heuristic: pure functions, no I/O
+│   │   ├── camera.py                     # PiCamera2Source / OpenCVCameraSource / SyntheticFrameSource
+│   │   ├── node.py                       # CVNode — the actual service
+│   │   └── __main__.py                   # `j10-cv-node` console script
+│   └── tests/                            # pytest, no camera required
+├── mavlink_bridge/                       # depends on j10_shm_protocol, not on cv_node
 │   ├── config.py                         # BridgeConfig — env-var configurable
 │   ├── bridge.py                         # MavlinkBridge — the actual service
-│   ├── cv_stub.py                        # bench-test stand-in for the real CV node
-│   └── __main__.py                       # `python -m mavlink_bridge`
+│   ├── cv_stub.py                        # bench-test stand-in — cv_node replaces this, doesn't extend it
+│   └── __main__.py                       # `j10-mavlink-bridge` console script
 ├── pyproject.toml                        # installable as `j10-mavlink-bridge`
 ├── requirements.txt                      # plain pip install alternative
 ├── tests/                                # pytest, no hardware required
 └── systemd/j10-mavlink-bridge.service
 ```
 
-(`cv_node/` — the real CV package — lands here too, as a third sibling depending on
-`j10_shm_protocol` the same way `mavlink_bridge` does; see the bottom of this README.)
+`j10_shm_protocol` is a standalone package, not part of either service that uses it — see
+"Shared-memory adapter" below for why. See [`cv_node/README.md`](cv_node/README.md) for
+the obstacle-avoidance heuristic, its known limitations, and Pi installation (`opencv`/
+`picamera2` need apt, not pip, on a Pi Zero 2W — see that README before running `pip
+install` and waiting a long time for a build that was never going to work).
 
 ## Running it
 
@@ -81,7 +93,9 @@ pip install -e ".[dev]"
 
 pytest -v j10_shm_protocol/tests tests    # 18 tests total, no serial port or FC needed
 
-# terminal 1 — stand in for the CV node: constant 0.2 m/s forward
+# terminal 1 — stand in for the CV node: constant 0.2 m/s forward. Still useful for
+# testing the bridge in isolation even now that cv_node exists — see cv_node/README.md
+# "Running it" for wiring the real thing in instead.
 j10-cv-stub --vx 0.2
 
 # terminal 2 — the bridge itself (needs a real or SITL FC on the configured serial port)
@@ -276,10 +290,11 @@ Props-off / tethered testing discipline from the top-level README and
 `docs/ARCHITECTURE.md` §8 (Phase 6/7) applies to this bridge exactly as it does to the
 ROS 2 stack: bring up and validate the failsafe path with propellers removed first.
 
-## Future: where `cv_node` lands
+## The CV node
 
-The real CV package will live at `companion/cv_node/`, as a third sibling next to
-`j10_shm_protocol/` and `mavlink_bridge/` — same pattern: its own `pyproject.toml`, its own
-tests, depending on `j10_shm_protocol` (now that it's already split out) to write commands
-instead of reaching into `mavlink_bridge`'s internals. `mavlink_bridge/cv_stub.py` is what
-it replaces, not something it extends.
+`companion/cv_node/` is the real vision package: Pi Camera Module 3 → grid-based,
+non-ML obstacle avoidance (edge density per Left/Center/Right zone) → this same
+`j10_shm_protocol` adapter, same pattern as `mavlink_bridge` (own `pyproject.toml`, own
+tests, no dependency on `mavlink_bridge`'s internals). It replaces
+`mavlink_bridge/cv_stub.py` for real flight — see [`cv_node/README.md`](cv_node/README.md)
+for the heuristic, its known limitations, and Pi installation.

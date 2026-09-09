@@ -1,4 +1,4 @@
-"""j10.mavlink_bridge — standalone PC/FC-... no, Pi/FC communication bridge.
+"""j10.mavlink_bridge — standalone Pi/FC communication bridge.
 
 A lightweight microservice that runs on the Raspberry Pi Zero 2W companion computer for
 J10 PT1. It owns the Serial/UART link to the CUAV V7 Nano flight controller and streams

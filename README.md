@@ -66,6 +66,13 @@ source install/setup.bash
 Phase 0 of 7 — foundation. `j10_interfaces` defines the contract; node packages land in
 build order (see `docs/ARCHITECTURE.md` §9).
 
+## PT1 — onboard CV bridge
+
+[`companion/`](companion/) is a separate, non-ROS track: a standalone microservice that
+runs directly on the Pi Zero 2W, talks to the CUAV V7 Nano over Serial/UART with
+`pymavlink`, and takes velocity commands from an onboard CV node via a shared-memory
+adapter — no ground-station PC, no VLA. See [`companion/README.md`](companion/README.md).
+
 ## Safety
 
 This system commands a real aircraft. Two rules are not negotiable:

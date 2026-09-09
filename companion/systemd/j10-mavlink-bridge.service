@@ -9,7 +9,14 @@ Wants=j10-cv-node.service
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/J10/companion
-ExecStart=/usr/bin/python3 -m mavlink_bridge
+# The console script, not `python3 -m mavlink_bridge`: with WorkingDirectory set to
+# companion/, `-m` would prepend that directory to sys.path, and companion/j10_shm_protocol/
+# (that package's project root, not the package itself) would shadow the real,
+# pip-installed j10_shm_protocol as an empty namespace package — the bridge would fail to
+# start on every boot. See the README "Running it" note and the pyproject.toml
+# [tool.pytest.ini_options] comment for the full mechanics. Path assumes the venv from the
+# README's "Running it" section was created at companion/.venv.
+ExecStart=/home/pi/J10/companion/.venv/bin/j10-mavlink-bridge
 Restart=on-failure
 RestartSec=2
 

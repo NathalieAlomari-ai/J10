@@ -14,22 +14,25 @@ streaming service" as explicitly out of its scope. `companion/` is where Pi-side
 software lives.
 
 ```
-┌─────────────────────────── Raspberry Pi Zero 2W ───────────────────────────┐
-│                                                                              │
-│   CV node (separate process, not part of this package)                     │
-│       │ writes (vx, vy, vz, yaw_rate) @ its own rate                       │
-│       ▼                                                                    │
-│   /dev/shm/j10_cv_cmd  ◄── shared-memory adapter, seqlock, 36 bytes ──►    │
-│       ▲                                                                    │
-│       │ reads latest command every setpoint tick                          │
-│   mavlink_bridge (this package)                                           │
-│       │ SET_POSITION_TARGET_LOCAL_NED @ 20 Hz (zeros on any failsafe)     │
-│       ▼                                                                    │
-│   /dev/serial0 (UART) ──────────────────────────────────────────┐          │
-└───────────────────────────────────────────────────────────────┼──────────┘
+┌─────────────────────────────── Raspberry Pi Zero 2W ───────────────────────────────┐
+│                                                                                      │
+│   cv_node (separate package, not yet written)                                      │
+│       │ writes (vx, vy, vz, yaw_rate) @ its own rate, via j10_shm_protocol         │
+│       ▼                                                                            │
+│   /dev/shm/j10_cv_cmd  ◄── j10_shm_protocol: seqlock, 36 bytes, stdlib-only ──►    │
+│       ▲                                                                            │
+│       │ reads latest command every setpoint tick, via j10_shm_protocol            │
+│   mavlink_bridge (this package)                                                   │
+│       │ SET_POSITION_TARGET_LOCAL_NED @ 20 Hz (zeros on any failsafe)             │
+│       ▼                                                                            │
+│   /dev/serial0 (UART) ──────────────────────────────────────────┐                  │
+└───────────────────────────────────────────────────────────────┼──────────────────┘
                                                                     ▼
                                                        CUAV V7 Nano (ArduPilot)
 ```
+
+`j10_shm_protocol` is its own installable package ([`j10_shm_protocol/`](j10_shm_protocol/)),
+not part of `mavlink_bridge` — see "Shared-memory adapter" below for why.
 
 ## Why Python, not C++
 
@@ -47,32 +50,54 @@ the CV node is.
 
 ```
 companion/
-├── pyproject.toml                        # installable as `j10-mavlink-bridge`
-├── requirements.txt                      # plain pip install alternative
-├── mavlink_bridge/
+├── j10_shm_protocol/                     # standalone package: the shared-memory contract
+│   ├── pyproject.toml                    # installable as `j10-shm-protocol`
+│   ├── j10_shm_protocol/__init__.py      # CVCommand, CVCommandReader, CVCommandWriter
+│   └── tests/                            # pytest, no hardware required
+├── mavlink_bridge/                       # depends on j10_shm_protocol, not the other way
 │   ├── config.py                         # BridgeConfig — env-var configurable
-│   ├── shm_protocol.py                   # the shared-memory adapter (both ends)
 │   ├── bridge.py                         # MavlinkBridge — the actual service
 │   ├── cv_stub.py                        # bench-test stand-in for the real CV node
 │   └── __main__.py                       # `python -m mavlink_bridge`
+├── pyproject.toml                        # installable as `j10-mavlink-bridge`
+├── requirements.txt                      # plain pip install alternative
 ├── tests/                                # pytest, no hardware required
 └── systemd/j10-mavlink-bridge.service
 ```
+
+(`cv_node/` — the real CV package — lands here too, as a third sibling depending on
+`j10_shm_protocol` the same way `mavlink_bridge` does; see the bottom of this README.)
 
 ## Running it
 
 ```bash
 cd companion
 python3 -m venv .venv && source .venv/bin/activate
+
+# j10_shm_protocol first — mavlink_bridge depends on it and it isn't on PyPI, so it has to
+# already be installed (editable is fine) before `pip install -e .` below can resolve it.
+pip install -e ./j10_shm_protocol
 pip install -e ".[dev]"
-pytest                                    # 18 tests, no serial port or FC needed
+
+pytest -v j10_shm_protocol/tests tests    # 18 tests total, no serial port or FC needed
 
 # terminal 1 — stand in for the CV node: constant 0.2 m/s forward
-python -m mavlink_bridge.cv_stub --vx 0.2
+j10-cv-stub --vx 0.2
 
 # terminal 2 — the bridge itself (needs a real or SITL FC on the configured serial port)
-J10_BRIDGE_SERIAL_PORT=/dev/serial0 python -m mavlink_bridge
+J10_BRIDGE_SERIAL_PORT=/dev/serial0 j10-mavlink-bridge
 ```
+
+Use the `pytest`, `j10-cv-stub`, and `j10-mavlink-bridge` commands above rather than
+`python -m pytest` / `python -m mavlink_bridge...` while your shell is inside `companion/`.
+`-m` prepends the current directory to `sys.path`, and `companion/j10_shm_protocol/` (that
+package's *project root*, not the package itself — no `__init__.py` at that level) would
+then shadow the real, pip-installed `j10_shm_protocol` with an empty namespace package,
+producing a confusing `ImportError`/`ModuleNotFoundError`. The installed console scripts
+sidestep this the same way the `pytest` command does; `python -m ...` still works fine from
+any directory that doesn't contain a folder literally named `j10_shm_protocol` (e.g. the
+repo root). See the `[tool.pytest.ini_options]` comment in `pyproject.toml` for the
+mechanics if you hit this while poking around.
 
 To watch the failsafe engage without touching hardware: `Ctrl-C` the `cv_stub`, or run it
 with `--duration 5` and watch the bridge's log switch to `failsafe hover engaged: CV
@@ -173,21 +198,27 @@ master.mav.set_position_target_local_ned_send(
 )
 ```
 
-## Shared-memory adapter (`shm_protocol.py`)
+## Shared-memory adapter (`j10_shm_protocol` package)
 
 POSIX shared memory via `multiprocessing.shared_memory` — one 36-byte segment,
-`/dev/shm/j10_cv_cmd` by default, no serialization and no broker. Layout and the seqlock
-concurrency scheme are documented in the module docstring; short version: the writer (CV
-node) bumps a sequence counter odd-then-even around every write, the reader (this bridge)
-retries a bounded number of times if it catches a write in progress, and any failure to get
-a clean read — including "the segment doesn't exist yet" — is treated exactly like a stale
-command by the bridge's failsafe logic. Nothing here blocks either process.
+`/dev/shm/j10_cv_cmd` by default, no serialization and no broker. It lives in
+[`j10_shm_protocol/`](j10_shm_protocol/) as its **own standalone, dependency-free package**
+rather than inside `mavlink_bridge`, precisely so the CV node doesn't have to import the
+bridge's package (or vice versa) just to speak the wire format both of them share — see
+that package's README for why, and its own test suite for the contract in isolation.
 
-`cv_stub.py` implements the writer half so you can bench-test the bridge (including the
-failsafe path) before the real CV node exists. A real CV node just needs:
+Layout and the seqlock concurrency scheme are documented in that package's module
+docstring; short version: the writer (CV node) bumps a sequence counter odd-then-even
+around every write, the reader (this bridge) retries a bounded number of times if it
+catches a write in progress, and any failure to get a clean read — including "the segment
+doesn't exist yet" — is treated exactly like a stale command by the bridge's failsafe
+logic. Nothing here blocks either process.
+
+`mavlink_bridge/cv_stub.py` implements the writer half so you can bench-test the bridge
+(including the failsafe path) before the real CV node exists. A real CV node just needs:
 
 ```python
-from mavlink_bridge.shm_protocol import CVCommandWriter
+from j10_shm_protocol import CVCommandWriter
 writer = CVCommandWriter(name="j10_cv_cmd")
 ...
 writer.write(vx=0.2, vy=0.0, vz=0.0, yaw_rate=0.1, valid=True)
@@ -244,3 +275,11 @@ a default.
 Props-off / tethered testing discipline from the top-level README and
 `docs/ARCHITECTURE.md` §8 (Phase 6/7) applies to this bridge exactly as it does to the
 ROS 2 stack: bring up and validate the failsafe path with propellers removed first.
+
+## Future: where `cv_node` lands
+
+The real CV package will live at `companion/cv_node/`, as a third sibling next to
+`j10_shm_protocol/` and `mavlink_bridge/` — same pattern: its own `pyproject.toml`, its own
+tests, depending on `j10_shm_protocol` (now that it's already split out) to write commands
+instead of reaching into `mavlink_bridge`'s internals. `mavlink_bridge/cv_stub.py` is what
+it replaces, not something it extends.

@@ -10,7 +10,7 @@ on:
 
 jobs:
   test:
-    name: pytest (mavlink_bridge)
+    name: pytest (j10_shm_protocol + mavlink_bridge)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -22,8 +22,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install package + dev dependencies
+      - name: Install j10_shm_protocol (mavlink_bridge depends on it; not on PyPI)
+        run: pip install -e "./j10_shm_protocol[dev]"
+
+      - name: Install mavlink_bridge + dev dependencies
         run: pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest -v
+        run: pytest -v j10_shm_protocol/tests tests

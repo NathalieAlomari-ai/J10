@@ -1,11 +1,15 @@
-"""Shared-memory adapter between the CV node and the MAVLink bridge.
+"""j10_shm_protocol — the shared-memory wire contract between the CV node and the MAVLink
+bridge, standalone so neither side depends on the other's package.
 
-This is the whole point of the "microservice" split: the CV node and this bridge are two
+This is the whole point of the "microservice" split: the CV node and the bridge are two
 independent OS processes (possibly restarted independently, possibly written in different
 languages later) that must hand off a tiny, high-frequency payload — (vx, vy, vz, yaw_rate)
 — with the lowest latency the Pi Zero 2W can give us. POSIX shared memory
 (``/dev/shm``, via :mod:`multiprocessing.shared_memory`) gets us a memcpy-speed handoff with
-no serialization, no socket syscalls, and no broker process.
+no serialization, no socket syscalls, and no broker process. Living in its own package means
+the contract itself — not one service's internals — is the thing both `mavlink_bridge` and
+`cv_node` import; either can be rewritten (even in another language) without the other
+noticing, as long as this wire format doesn't move.
 
 Wire format (36 bytes, little-endian, fixed layout — see ``_STRUCT``)
 -----------------------------------------------------------------------
@@ -52,6 +56,9 @@ from dataclasses import dataclass
 from multiprocessing import shared_memory
 from typing import Optional
 
+__all__ = ["CVCommand", "CVCommandReader", "CVCommandWriter", "SHM_SIZE"]
+__version__ = "0.1.0"
+
 _MAGIC = 0x4A313043  # b"J10C" read as a little-endian uint32
 _STRUCT = struct.Struct("<IIQ4fB3x")  # magic, seq, timestamp_ns, vx,vy,vz,yaw_rate, valid
 SHM_SIZE = _STRUCT.size  # 36 bytes
@@ -78,8 +85,9 @@ class CVCommand:
 
 
 class CVCommandWriter:
-    """Used by the CV node. Not imported by the bridge itself — kept here because it and
-    the reader are two halves of one contract and must never drift apart."""
+    """Used by the CV node. Kept in the same module as the reader because they're two
+    halves of one contract and must never drift apart — this package's only job is that
+    contract, not whichever service happens to call it."""
 
     def __init__(self, name: str = "j10_cv_cmd"):
         try:

@@ -3,7 +3,7 @@ import uuid
 
 import pytest
 
-from mavlink_bridge.shm_protocol import CVCommandReader, CVCommandWriter
+from j10_shm_protocol import CVCommandReader, CVCommandWriter
 
 
 @pytest.fixture

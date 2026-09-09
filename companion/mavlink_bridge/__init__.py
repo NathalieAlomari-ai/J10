@@ -6,12 +6,15 @@ MAVLink velocity setpoints derived from whatever the CV node last wrote to share
 
 This package has exactly one job: physical drive commands. It knows nothing about vision,
 object detection, or planning — that lives entirely on the other side of the shared-memory
-adapter, in the CV node. See ``README.md`` in this directory for the wire protocol, the
-MAVLink references, and how the two processes are meant to be run together.
+adapter, in the CV node. The adapter itself is the standalone ``j10_shm_protocol`` package
+(see ``../j10_shm_protocol/``), not part of this one — see ``README.md`` in this directory
+for the wire protocol, the MAVLink references, and how the two processes are meant to be
+run together.
 """
 
+from j10_shm_protocol import CVCommand, CVCommandReader, CVCommandWriter
+
 from .config import BridgeConfig
-from .shm_protocol import CVCommand, CVCommandReader, CVCommandWriter
 
 __all__ = ["BridgeConfig", "CVCommand", "CVCommandReader", "CVCommandWriter"]
 

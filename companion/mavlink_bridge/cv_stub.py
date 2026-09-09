@@ -22,7 +22,7 @@ import logging
 import signal
 import time
 
-from .shm_protocol import CVCommandWriter
+from j10_shm_protocol import CVCommandWriter
 
 log = logging.getLogger("j10.mavlink_bridge.cv_stub")
 

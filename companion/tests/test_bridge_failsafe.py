@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from j10_shm_protocol import CVCommand
 from mavlink_bridge.bridge import MavlinkBridge
 from mavlink_bridge.config import BridgeConfig
-from mavlink_bridge.shm_protocol import CVCommand
 
 
 @dataclass

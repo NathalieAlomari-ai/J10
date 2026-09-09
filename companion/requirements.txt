@@ -1,3 +1,6 @@
 # For a plain `pip install -r requirements.txt` deploy on the Pi (no `pip install -e .`).
+# j10_shm_protocol first: mavlink_bridge imports it and it isn't on PyPI, so it has to be
+# installed from this checkout rather than resolved from an index.
+-e ./j10_shm_protocol
 pymavlink>=2.4.37
 pyserial>=3.5

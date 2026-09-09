@@ -22,10 +22,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from j10_shm_protocol import CVCommandReader
 from pymavlink import mavutil
 
 from .config import BridgeConfig
-from .shm_protocol import CVCommandReader
 
 log = logging.getLogger("j10.mavlink_bridge")
 

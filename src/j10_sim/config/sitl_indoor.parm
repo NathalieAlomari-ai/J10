@@ -1,0 +1,146 @@
+# ArduCopter SITL parameters for indoor, GPS-denied flight on simulated optical flow and
+# rangefinder. Loaded by scripts/run_sitl.sh via sim_vehicle.py --add-param-file.
+#
+# This mirrors docs/ARCHITECTURE.md section 7. It is the SITL block only — the real MTF-01
+# over MSP uses the same EK3_SRC1_* lines with different sensor type IDs, and those must be
+# checked against the current ArduPilot MTF-01 wiki page before first flight.
+
+# --- Airframe ----------------------------------------------------------------------------
+# Standard quad-X, matching the iris_with_standoffs model this world spawns. Explicit
+# because it was found missing during the Phase 1 arming investigation: `ros2 param get`
+# through mavros returned "Parameter not set" for both, and the FCU logged a persistent
+# "PreArm: Motors: Check frame class and type" on every SITL run regardless of ARMING_CHECK.
+FRAME_CLASS     1
+FRAME_TYPE      1
+
+# --- EKF3 on, GPS off -------------------------------------------------------------------
+AHRS_EKF_TYPE   3
+EK3_ENABLE      1
+# GPS_TYPE was renamed GPS1_TYPE in ArduPilot 4.5. An unknown parameter name is warned
+# about and then ignored, which on a recent tree would leave GPS quietly ACTIVE and the
+# vehicle not GPS-denied at all. Both names are set; confirm with `param show GPS*`.
+GPS_TYPE        0
+GPS1_TYPE       0
+
+# Source set 1: horizontal position/velocity from optical flow, vertical from baro.
+#
+# EK3_SRC1_POSZ was originally 2 (RangeFinder), matching the architecture doc's target
+# sensor set for the real MTF-01. Left at that value, ArduCopter refuses to arm in SITL
+# with a persistent "PreArm: Rangefinder 1: No Data" -- confirmed via /j10/vehicle/state
+# showing rangefinder_valid: false / rangefinder_range: nan, and this specific PreArm
+# check is NOT gated by ARMING_CHECK=0 (it stayed even with every other check disabled).
+# Root cause: the iris_with_standoffs model this world spawns has no distance sensor of
+# its own (confirmed against its SDF), so RNGFND1_TYPE=100 (SITL simulated rangefinder)
+# never actually produces a reading here regardless of MAVROS/mavlink_bridge config.
+#
+# Set to 1 (Baro) instead: SITL's simulated barometer works with zero extra setup, and
+# Phase 1's exit criterion only needs a working vertical estimate to arm/hover/move on
+# command -- it does not require proving rangefinder-based altitude hold, which is later
+# (Phase 6) scope. Fixing the simulated rangefinder itself is tracked as a follow-up and
+# does not block Phase 1.
+#
+# Baro, not RangeFinder, is also the right long-term call, not just a SITL workaround:
+# flow is an ANGULAR rate, so converting it to a velocity needs a height and the
+# rangefinder must be healthy either way -- but making it the EKF's primary height source
+# as well couples two failure modes and is fragile over a non-flat indoor floor. The
+# rangefinder still feeds flow scaling, and j10_safety still prefers it for AGL.
+EK3_SRC1_POSXY  0
+EK3_SRC1_VELXY  5
+EK3_SRC1_POSZ   1
+EK3_SRC1_VELZ   0
+EK3_SRC1_YAW    1
+# Use flow for navigation rather than terrain height only.
+EK3_FLOW_USE    1
+
+# --- Simulated optical flow -------------------------------------------------------------
+# FLOW_TYPE takes effect only after a reboot.
+SIM_FLOW_ENABLE 1
+FLOW_TYPE       10
+
+# --- Simulated rangefinder --------------------------------------------------------------
+# The ANALOG path, which is what ArduPilot's own SITL optical-flow recipe uses. The previous
+# setting mixed the two: RNGFND1_TYPE 100 selects the SITL rangefinder driver, but
+# SIM_SONAR_SCALE is the scaling for the analog device, and RNGFND1_PIN was missing
+# entirely. The result is no range reading, which means no flow scaling, which means the
+# EKF never fuses flow — arming stays blocked with no error that names the cause.
+RNGFND1_TYPE    1
+RNGFND1_PIN     0
+RNGFND1_SCALING 10
+RNGFND1_ORIENT  25
+RNGFND1_MIN_CM  5
+RNGFND1_MAX_CM  4000
+SIM_SONAR_SCALE 10
+
+# --- Telemetry stream rates --------------------------------------------------------------
+# ESTIMATOR_STATUS (and PID_TUNING, VIBRATION, ...) live in ArduPilot's "EXTRA4" message
+# group, which is NOT part of MAVProxy's default stream request and is not requested by
+# MAVROS's sys_status plugin either -- confirmed by reading mavros's sys_status.cpp: it
+# subscribes and publishes /mavros/estimator_status, but never sends REQUEST_DATA_STREAM or
+# SET_MESSAGE_INTERVAL to ask the FCU to actually send it. Both of those runtime request
+# mechanisms were also tried live against this SITL build and both failed outright
+# (`/mavros/set_stream_rate` had no visible effect; `/mavros/set_message_interval` for
+# message id 230 came back success=false) -- this ArduPilot build does not seem to honour
+# either at runtime. Setting the stream rate here, at boot, is the one path that has
+# actually worked all session for every other ArduPilot-side setting (FRAME_CLASS,
+# GPS_TYPE, EK3_SRC1_POSZ all only took effect via this file + a wiped eeprom).
+#
+# Without this, vehicle_state_node's ekf_healthy stays false forever -- not because the
+# EKF isn't healthy, but because /mavros/estimator_status never receives a single message,
+# so the ekf_healthy computation (which only runs once estimator_.valid is true) never
+# executes at all. SR0 because MAVProxy's master link binds ArduCopter's first serial
+# channel (SERIAL0/telem1) in this SITL setup.
+SR0_EXTRA4      4
+
+# --- Arming and failsafes for a bench SITL run ------------------------------------------
+# No RC transmitter is attached to SITL, so the throttle failsafe would block every test.
+# This relaxation is SITL-only and must NOT be carried into a real airframe parameter set.
+FS_THR_ENABLE   0
+BRD_SAFETYENABLE 0
+
+# ArduCopter auto-disarms an idle armed-but-landed vehicle after DISARM_DELAY seconds (10s
+# default) of near-zero throttle -- confirmed live: "FCU: Arming motors" followed by
+# "FCU: Disarming motors" ~15s later on every SITL arm attempt this session, with no
+# commanded motion in between. Because MAVROS's own arm service hangs on this ArduPilot
+# build (see mavros_apm.yaml's fcu_url comment) and arming has to be done by hand through
+# MAVProxy's console instead, that ~10-15s window was nowhere near enough time to also
+# switch to GUIDED and get a real velocity command onto /j10/cmd_vel_safe by hand across
+# several terminals. 0 disables the auto-disarm entirely so there's no clock to race while
+# proving the Phase 1 exit criterion. SITL bench-testing convenience only -- a real airframe
+# must keep its normal auto-disarm behaviour.
+DISARM_DELAY    0
+
+# Prearm checks stay ON.
+#
+# They were previously 0, and that is why the EKF blocker was so hard to diagnose:
+# ARMING_CHECK 0 suppresses the PreArm message that names WHICH estimator flag is missing,
+# so the failure surfaces only as a silent refusal several layers up. If arming is refused
+# now, the console says why. Turn this off only to prove a hypothesis, and turn it back on.
+ARMING_CHECK    1
+
+# The GCS failsafe is ENABLED, and that is a requirement rather than a preference: task A
+# specifies "stop commands on stream drop -> FC failsafe takes over" with the KPI
+# "Commands stop <= 1 s after link loss; FC failsafe verified". With FS_GCS_ENABLE 0 there
+# is no failsafe to take over, so that KPI cannot be demonstrated at all.
+#
+# 1 = LAND. Not RTL: there is no GPS indoors, and RTL without a home position is not a
+# recovery, it is a second failure.
+#   VERIFY: the FS_GCS_ENABLE option numbering differs between Copter releases. Confirm
+#   which value means LAND on this build before trusting the failsafe.
+FS_GCS_ENABLE   1
+# Seconds of MAVLink silence before the failsafe triggers. The KPI gives the PC 1 s to stop
+# commanding; this is the flight controller's half of that contract.
+FS_GCS_TIMEOUT  1
+
+# --- Guided mode behaviour ---------------------------------------------------------------
+# The bridge streams setpoints at 30 Hz continuously, so this timeout should never trip.
+# Left at the default value explicitly so a change in ArduPilot defaults is visible here.
+GUID_TIMEOUT    3
+
+# Conservative indoor envelope. The safety filter enforces its own limits independently in
+# Phase 2; these are the flight controller's backstop.
+PILOT_SPEED_UP  100
+PILOT_SPEED_DN  100
+WPNAV_SPEED     150
+WPNAV_SPEED_UP  100
+WPNAV_SPEED_DN  100
+ANGLE_MAX       1500

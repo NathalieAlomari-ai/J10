@@ -1,0 +1,60 @@
+teleop_override_node:
+  ros__parameters:
+    # 50 Hz per docs/ARCHITECTURE.md -- faster than the 30 Hz control path, so a human
+    # input is never the thing the cascade is waiting on.
+    #
+    # Publishing is timer-driven rather than Joy-driven on purpose: j10_safety arbitrates on
+    # message freshness, so a manual command has to go stale on its own once the operator
+    # stops. Publishing only from the Joy callback would tie that timing to whatever rate
+    # the joy driver happens to run at.
+    publish_rate_hz: 50.0
+
+    # --- Topics ---
+    joy_topic: "/joy"
+    cmd_vel_topic: "/j10/cmd_vel_manual"
+    deadman_topic: "/j10/teleop/deadman"
+    estop_topic: "/j10/safety/estop"
+    frame_id: "base_link"
+
+    # Silence longer than this reads as a released deadman, not as the last command held --
+    # an unplugged controller or a crashed driver must hand control back.
+    joy_timeout_sec: 0.5
+
+    # --- Axis map (Xbox-style layout) ---
+    # Indices, because sensor_msgs/Joy has no names and the layout is per controller model.
+    # Verify against `ros2 topic echo /joy` before flying an unfamiliar controller: a wrong
+    # index here is a wrong direction in the air.
+    axis_forward: 1     # left stick vertical
+    axis_left: 0        # left stick horizontal
+    axis_up: 4          # right stick vertical
+    axis_yaw: 3         # right stick horizontal
+
+    invert_forward: false
+    invert_left: false
+    invert_up: false
+    invert_yaw: false
+
+    # --- Buttons ---
+    deadman_button: 4   # left shoulder. Released = zero velocity, always.
+    estop_button: 1     # B / circle. Latches; deliberately needs no deadman held.
+
+    # -1 leaves E-stop reset off the controller entirely, so clearing a latched stop is a
+    # deliberate act at the console via /j10/safety/reset_estop. If bound to a button, the
+    # deadman must be held at the same time -- a two-handed gesture, so one fumbled press
+    # cannot clear a stop somebody meant to trigger.
+    estop_reset_button: -1
+
+    # --- Shaping ---
+    # Sticks do not return to a true centre; without a deadzone a resting controller
+    # commands a slow permanent drift.
+    deadzone: 0.08
+
+    # 0 = linear, 1 = cubic. Cubic gives fine control near centre while keeping full
+    # authority at the stops.
+    expo: 0.5
+
+    # Phase 7 indoor envelope. These are the operator's limits, not the safety filter's --
+    # j10_safety clamps independently and is the only node with authority to veto.
+    max_linear_mps: 0.5
+    max_vertical_mps: 0.3
+    max_yaw_rate_rps: 0.8

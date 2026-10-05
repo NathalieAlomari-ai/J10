@@ -1,0 +1,32 @@
+# Motion controller: the fast layer of the two-rate cascade.
+#
+# These values shape *smoothness*, not safety. Every command produced here still passes
+# through j10_safety, which enforces the actual envelope independently. Nothing in this
+# file may be relied on as a safety limit.
+
+motion_controller_node:
+  ros__parameters:
+    rate_hz: 30.0
+    frame_id: "base_link"
+
+    # --- Trapezoidal shaping ---
+    # Ease into motion gently; come out of it faster. A step change in commanded velocity
+    # at 30 Hz is itself a disturbance, so intent changes are ramped.
+    max_linear_accel_mps2: 0.5
+    max_linear_decel_mps2: 1.0
+    max_yaw_accel_rps2: 1.0
+    max_yaw_decel_rps2: 2.0
+
+    # --- Trusting the model ---
+    # Intents below this confidence are ignored outright and the command decays to hover.
+    # Rejecting a low-confidence intent is safer than flying it slowly.
+    min_confidence: 0.3
+    scale_by_confidence: false
+
+    # Hard ceiling on how long any single intent is followed, whatever `duration` the model
+    # asked for. Without this a model emitting duration=1000 would grant itself unlimited
+    # authority and the expiry path would never fire.
+    max_intent_age_sec: 1.0
+
+    # Descent rate for ACTION_LAND. The safety filter still bounds this.
+    land_speed_mps: 0.3

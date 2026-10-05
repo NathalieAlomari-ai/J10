@@ -1,0 +1,87 @@
+# Minimal MAVROS configuration for ArduPilot SITL.
+#
+# Kept deliberately small. MAVROS ships a full apm_config.yaml with per-plugin tuning; the
+# only values Phase 1 actually needs are the link and the target IDs, and a short list
+# keeps it obvious what we changed.
+#
+# The wildcard key applies regardless of the node name mavros_node is launched under.
+
+/**:
+  ros__parameters:
+    # MAVROS listens on the UDP endpoint MAVProxy relays to (run_sitl.sh passes an explicit
+    # --out for 14551; MAVROS binds it and learns the remote endpoint from the first packet).
+    #
+    # tcp://127.0.0.1:5760 -- connecting straight to ArduCopter's own MAVLink server,
+    # bypassing MAVProxy -- was tried during the Phase 1 arming investigation on the theory
+    # that MAVProxy's relay was losing COMMAND_ACKs. It was not: with the direct TCP link
+    # confirmed live ("FCU URL: tcp://127.0.0.1:5760" in mavros_node's own startup log),
+    # /mavros/cmd/arming still hung with no response at all, exactly as it did over UDP. So
+    # MAVProxy is not the culprit, and the direct TCP link is strictly worse here -- it also
+    # turned out to be flaky, dropping to connected:false on /mavros/state within a minute
+    # or two on this machine, which the UDP relay never did. Reverted.
+    #
+    # What the arming hang actually is: commands that need a COMMAND_ACK back from the FCU
+    # fail across the board on this ArduPilot build (V4.8.0-dev) -- arming, AUTOPILOT_VERSION
+    # ("VER: ... command plugin service call failed!" on every startup), and
+    # SET_MESSAGE_INTERVAL (success=false) all fail the same way, while set_mode, which needs
+    # no ack, works instantly. That points at a MAVLink-level compatibility problem between
+    # this mavros build and this ArduPilot dev build, not at the link type or at our code --
+    # the FC itself arms fine when asked by MAVProxy directly. Tracked as a follow-up; for
+    # now SITL arming is done by hand through MAVProxy's console.
+    fcu_url: "udp://:14551@"
+    gcs_url: ""
+
+    target_system_id: 1
+    target_component_id: 1
+
+    fcu_protocol: "v2.0"
+
+    # ArduPilot streams these at whatever rate the FC is configured for; asking for a rate
+    # here keeps /mavros/local_position/* fast enough to feed a 20 Hz VehicleState.
+    conn:
+      timeout: 10.0
+      heartbeat_rate: 1.0
+
+    sys:
+      min_voltage: [10.0]
+      disable_diag: false
+
+    # Allowlist, not denylist. Several stock plugins on this build independently reuse the
+    # relative topic name "~/status" (companion_process_status and esc_status both
+    # confirmed crashing mavros_node on startup with a duplicate publisher/subscriber);
+    # excluding them by name one crash at a time proved unreliable, and this installed
+    # build's plugin id strings have already disagreed with upstream ros2-branch source
+    # more than once while chasing that (e.g. "command"/"sys_status" here vs. "cmd"/"sys"
+    # in source). This exact list — plugin_denylist: ['*'] with the allowlist below as the
+    # only carve-out — was captured empirically: `plugin_denylist: ['*']` with no allowlist
+    # blocks every plugin, letting mavros_node print "Plugin <id> ignored" for the complete,
+    # authoritative id list for this build with zero crash risk, then the five plugins
+    # Phase 1 actually needs were picked out of that captured list and verified against it
+    # with Python's fnmatch (same matching mavros_uas.cpp's is_plugin_allowed() uses).
+    #
+    #   sys_status     -> /mavros/state, /mavros/battery, /mavros/estimator_status
+    #   local_position  -> /mavros/local_position/pose, /mavros/local_position/velocity_local
+    #   setpoint_raw    -> /mavros/setpoint_raw/local — the bridge's core output
+    #   command         -> /mavros/cmd/arming, /mavros/cmd/takeoff, /mavros/set_mode
+    #   rangefinder     -> /mavros/rangefinder/rangefinder
+    #   param           -> exposes FCU parameters (FRAME_CLASS, ARMING_CHECK, ...) through
+    #                      the standard ROS 2 parameter services on the /mavros/mavros node,
+    #                      so `ros2 param get/set /mavros/mavros <NAME>` reaches the FCU
+    #                      directly. Diagnostic aid for the Phase 1 arming investigation —
+    #                      confirmed via param.cpp source that ~/get_parameters and
+    #                      ~/set_parameters use the plain rcl_interfaces types, not a
+    #                      MAVROS-specific service, so the standard `ros2 param` CLI works
+    #                      with no extra plumbing.
+    #
+    # px4flow is deliberately excluded — not needed until the real MTF-01 flow path is
+    # exercised in Phase 6; vehicle_state_node already treats that topic being entirely
+    # absent as flow_valid staying false rather than an error.
+    plugin_denylist:
+      - '*'
+    plugin_allowlist:
+      - sys_status
+      - command
+      - local_position
+      - setpoint_raw
+      - rangefinder
+      - param

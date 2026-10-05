@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>j10_vla</name>
+  <version>0.1.0</version>
+  <description>
+    Vision-language-action inference. Loads a backend, feeds it the latest camera frame,
+    the active instruction and vehicle state, and publishes NavIntent at 5-10 Hz with
+    measured inference latency. Inference runs off the executor thread and the frame buffer
+    holds exactly one frame, so a slow model delays only itself and never queues stale
+    input. Ships the Phase 4 scripted backend; a real checkpoint plugs into the same
+    Backend interface in Phase 5.
+  </description>
+  <maintainer email="info@jnhsystems.com">JNH Systems</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>j10_interfaces</depend>
+
+  <!-- Optional at runtime: the scripted Phase 4 backend never touches the image, so the
+       node falls back to passing the raw sensor_msgs/Image through when cv_bridge is
+       absent. A real model backend in Phase 5 should depend on it properly. -->
+  <exec_depend>cv_bridge</exec_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

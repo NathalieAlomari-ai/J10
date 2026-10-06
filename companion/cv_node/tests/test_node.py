@@ -109,3 +109,51 @@ def test_stop_halts_the_loop():
     node.stop()
     node.run()  # would spin forever at max_iterations=None if stop() didn't take effect
     assert writer.calls == []
+
+
+# -- detection wiring -----------------------------------------------------------------------
+
+class FakeDetectionWorker:
+    def __init__(self):
+        self.submitted = []
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def submit(self, frame) -> None:
+        self.submitted.append(frame)
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_color_frames_feed_the_detector_and_still_produce_a_command():
+    color = np.full((120, 120, 3), 128, dtype=np.uint8)
+    worker = FakeDetectionWorker()
+    config = CVNodeConfig(write_rate_hz=1000.0)
+    writer = FakeWriter()
+    node = CVNode(config, frame_source=SyntheticFrameSource([color]), writer=writer,
+                  detection_worker=worker)
+
+    node.run(max_iterations=3)
+    node.close()
+
+    assert worker.started is True
+    assert len(worker.submitted) == 3
+    assert worker.submitted[0].shape == (120, 120, 3)  # the detector gets color, not gray
+    assert len([c for c in writer.calls if c[4]]) == 3  # navigation is unaffected
+    assert worker.stopped is True
+
+
+def test_detection_is_off_by_default():
+    node, _ = make_node([_blank_frame()])
+    assert node.detection_worker is None
+
+
+def test_enabling_detection_without_a_model_fails_at_startup(tmp_path):
+    config = CVNodeConfig(detect_enabled=True, detect_model_path=str(tmp_path / "missing.tflite"),
+                          detect_labels_path=str(tmp_path / "labelmap.txt"))
+    with pytest.raises(FileNotFoundError):
+        CVNode(config, frame_source=SyntheticFrameSource([_blank_frame()]), writer=FakeWriter())

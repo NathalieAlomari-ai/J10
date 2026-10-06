@@ -54,6 +54,62 @@ is the only function a `compute_zone_flow_magnitudes` sibling would need to sit 
 without touching `decide()` or anything upstream of it, if/when that's worth the CPU
 budget.
 
+## Human detection
+
+Optional, off by default. With `J10_CV_DETECT_ENABLED=1` the node also runs a small
+object-detection model on the same camera frames and reports people it sees. It is an
+inspection output only — it does not change the velocity command.
+
+- **Model**: quantized SSD-MobileNet-v1 (COCO), ~4 MB, CPU-only through TFLite. See
+  `cv_node/detection.py` for why this and not something in the YOLO family.
+- **Own thread, own rate**: inference takes longer than a vision tick, so it runs on a
+  separate thread on whichever frame is newest (`cv_node/detection_worker.py`). The 8 Hz
+  command loop never waits for it.
+- **Output**: a log line whenever what's in view changes; the latest result as JSON in
+  `/dev/shm/j10_detections.json`; and, with `J10_CV_DETECT_SNAPSHOT_DIR` set, annotated
+  JPEGs of frames that had a detection (rate-limited, capped at 200 files).
+- **Other classes**: `J10_CV_DETECT_LABELS=person,chair,...` — any name in
+  `models/labelmap.txt`.
+
+### Setup
+
+```bash
+j10-fetch-model                 # one-time: downloads detect.tflite + labelmap.txt into models/
+pip install ai-edge-litert      # the TFLite runtime; `tflite-runtime` on older Raspberry Pi OS
+```
+
+Check it by itself before running the node — this is also how to measure real speed and
+temperature on the Pi, which nobody has done yet:
+
+```bash
+j10-detect picamera2 --max-frames 30 --save-dir /tmp/detect   # on the Pi
+j10-detect 0                                                    # laptop webcam
+j10-detect some_video.mp4 --every 10
+```
+
+Then run the node with it on:
+
+```bash
+J10_CV_DETECT_ENABLED=1 J10_CV_CAMERA_BACKEND=picamera2 j10-cv-node
+```
+
+### Keeping the Pi Zero 2W cool
+
+The Zero 2W throttles itself at 80 °C and has 512 MB of RAM, so detection is built to stay
+well inside both:
+
+- **Rate ceiling** — `J10_CV_DETECT_MAX_RATE_HZ` (default `2`). The detection thread
+  idles between inferences rather than running back-to-back.
+- **Two of four cores** — `J10_CV_DETECT_THREADS` (default `2`).
+- **Thermal gate** — inference stops at `J10_CV_DETECT_TEMP_PAUSE_C` (default `75`) and
+  resumes at `J10_CV_DETECT_TEMP_RESUME_C` (default `68`). Obstacle avoidance keeps
+  running throughout; the status JSON reports `thermal_paused: true`.
+
+The OS matters as much as the code. Use **Raspberry Pi OS Lite (64-bit)** — no desktop —
+and run the services directly under systemd. Docker is the wrong trade on this board: the
+daemon alone takes a meaningful share of 512 MB, and it complicates camera (`libcamera`)
+and UART access for no benefit a venv doesn't already give.
+
 ## Layout
 
 ```
@@ -66,6 +122,11 @@ cv_node/
 │   ├── smoothing.py             # EmaSmoother — output smoothing, its own tiny class
 │   ├── camera.py                # FrameSource: PiCamera2Source / OpenCVCameraSource / SyntheticFrameSource
 │   ├── node.py                  # CVNode — wires camera -> obstacle_avoidance -> j10_shm_protocol
+│   ├── detection.py             # Detector / TFLiteDetector / parse_ssd_outputs
+│   ├── detection_worker.py      # DetectionWorker — background thread, rate ceiling, thermal gate
+│   ├── detection_output.py      # DetectionPublisher — log, status JSON, snapshots
+│   ├── detect_cli.py            # `j10-detect` — run the detector by itself
+│   ├── fetch_model.py           # `j10-fetch-model` — download the model into models/
 │   └── __main__.py              # `j10-cv-node` console script
 └── tests/                       # pytest — no camera or hardware required
 ```

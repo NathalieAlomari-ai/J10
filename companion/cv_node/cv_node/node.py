@@ -12,10 +12,14 @@ import logging
 import time
 from typing import Optional
 
+import cv2
 from j10_shm_protocol import CVCommandWriter
 
 from .camera import FrameSource, create_frame_source
 from .config import CVNodeConfig
+from .detection import create_detector
+from .detection_output import DetectionPublisher
+from .detection_worker import DetectionWorker
 from .obstacle_avoidance import compute_zone_edge_densities, decide
 from .smoothing import EmaSmoother
 
@@ -28,13 +32,23 @@ class CVNode:
         config: CVNodeConfig,
         frame_source: Optional[FrameSource] = None,
         writer: Optional[CVCommandWriter] = None,
+        detection_worker: Optional[DetectionWorker] = None,
     ):
         self.config = config
+        # Built first: with detection enabled, a missing model or runtime should fail
+        # startup before the camera is opened or the shared-memory segment is created.
+        if detection_worker is None and config.detect_enabled:
+            detection_worker = DetectionWorker(
+                create_detector(config), config, sink=DetectionPublisher(config)
+            )
+        self.detection_worker = detection_worker
         self.frame_source = frame_source or create_frame_source(config)
         self.writer = writer or CVCommandWriter(name=config.shm_name)
         self._vx_smoother = EmaSmoother(config.ema_alpha)
         self._yaw_smoother = EmaSmoother(config.ema_alpha)
         self._stop = False
+        if self.detection_worker is not None:
+            self.detection_worker.start()
 
     def stop(self) -> None:
         self._stop = True
@@ -72,8 +86,14 @@ class CVNode:
             log.warning("camera read failed; skipping this tick (bridge will fail safe on staleness)")
             return
 
+        # Hand the frame over and move on — detection runs on its own thread at its own
+        # (much slower) rate and must never hold up the command this tick has to write.
+        if self.detection_worker is not None:
+            self.detection_worker.submit(frame)
+
         try:
-            densities = compute_zone_edge_densities(frame, self.config)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+            densities = compute_zone_edge_densities(gray, self.config)
             decision = decide(densities, self.config)
         except Exception:
             log.exception("vision pipeline error; skipping this tick")
@@ -99,5 +119,7 @@ class CVNode:
             self.writer.write(0.0, 0.0, 0.0, 0.0, valid=False)
         except Exception:
             log.exception("failed to write shutdown marker")
+        if self.detection_worker is not None:
+            self.detection_worker.stop()
         self.frame_source.close()
         self.writer.close()

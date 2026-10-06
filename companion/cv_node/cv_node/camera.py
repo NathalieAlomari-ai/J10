@@ -15,7 +15,9 @@ from .config import CVNodeConfig
 
 class FrameSource(Protocol):
     def read(self) -> Optional["np.ndarray"]:
-        """Returns the next grayscale frame, or ``None`` on a capture failure. ``None`` is
+        """Returns the next frame — BGR (HxWx3), OpenCV's channel order — or ``None`` on
+        a capture failure. The node makes its own grayscale copy for obstacle avoidance;
+        the detector needs the color. ``None`` is
         not an exception: the node treats it as "skip this tick" and moves on — a camera
         hiccup should not crash the process, and not writing is exactly what lets the
         bridge's own staleness failsafe take over if it keeps happening."""
@@ -45,8 +47,9 @@ class PiCamera2Source:
         self._picam2.start()
 
     def read(self) -> Optional["np.ndarray"]:
-        frame = self._picam2.capture_array()  # RGB888, HxWx3
-        return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        # libcamera names formats by packed-word order, so "RGB888" arrives in memory
+        # as B, G, R — already the BGR every FrameSource returns. No conversion needed.
+        return self._picam2.capture_array()
 
     def close(self) -> None:
         self._picam2.stop()
@@ -68,7 +71,7 @@ class OpenCVCameraSource:
         ok, frame = self._cap.read()
         if not ok:
             return None
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return frame
 
     def close(self) -> None:
         self._cap.release()

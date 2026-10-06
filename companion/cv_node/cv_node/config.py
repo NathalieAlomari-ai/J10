@@ -70,6 +70,34 @@ class CVNodeConfig:
     # 1.0 = no smoothing, smaller = smoother/slower to react.
     ema_alpha: float = 0.3
 
+    # --- object detection (see detection.py / detection_worker.py) -----------------------
+    # Off by default: it needs a model file and a TFLite runtime that the obstacle-
+    # avoidance loop doesn't (see README "Human detection"). When on, a missing model or
+    # runtime fails startup rather than silently running without detection.
+    detect_enabled: bool = False
+    # Relative paths are tried against the working directory, then this package's project
+    # root (where `j10-fetch-model` puts them by default).
+    detect_model_path: str = "models/detect.tflite"
+    detect_labels_path: str = "models/labelmap.txt"
+    # Comma-separated class names to report; everything else the model sees is dropped.
+    detect_labels: str = "person"
+    detect_score_threshold: float = 0.5
+    # A ceiling, not a target: inference runs on its own thread and never faster than
+    # this, so the Pi Zero 2W isn't pinned at 100% CPU just because frames are available.
+    detect_max_rate_hz: float = 2.0
+    # Of the Zero 2W's 4 cores — leaves the vision loop and mavlink_bridge their own.
+    detect_threads: int = 2
+    # Detection pauses at/above the first and resumes at/below the second (hysteresis).
+    # The Zero 2W throttles itself at 80 C; obstacle avoidance keeps running throughout.
+    detect_temp_pause_c: float = 75.0
+    detect_temp_resume_c: float = 68.0
+    # Latest result as JSON, rewritten atomically after every inference. "" disables it.
+    detect_status_path: str = "/dev/shm/j10_detections.json"
+    # Annotated JPEGs of frames with a detection in them. "" disables it.
+    detect_snapshot_dir: str = ""
+    detect_snapshot_min_interval_s: float = 2.0
+    detect_snapshot_max_files: int = 200
+
     log_level: str = "INFO"
 
     @classmethod
@@ -92,3 +120,7 @@ class CVNodeConfig:
     @property
     def write_period_s(self) -> float:
         return 1.0 / self.write_rate_hz
+
+    @property
+    def detect_wanted_labels(self) -> frozenset[str]:
+        return frozenset(s.strip() for s in self.detect_labels.split(",") if s.strip())

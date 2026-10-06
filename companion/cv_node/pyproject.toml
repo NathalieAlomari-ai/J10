@@ -22,9 +22,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# The TFLite runtime, needed only with J10_CV_DETECT_ENABLED=1. Optional so the
+# obstacle-avoidance node and the test suite install without it.
+detect = ["ai-edge-litert"]
 
 [project.scripts]
 j10-cv-node = "cv_node.__main__:main"
+j10-detect = "cv_node.detect_cli:main"
+j10-fetch-model = "cv_node.fetch_model:main"
 
 [tool.setuptools]
 packages = ["cv_node"]
